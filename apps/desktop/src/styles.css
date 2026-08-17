@@ -161,6 +161,11 @@ main {
   font-size: 13px;
 }
 .cli-toolbar button:hover { border-color: var(--accent); }
+.cli-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cli-toolbar button:disabled:hover { border-color: var(--border); }
 .spacer { flex: 1; }
 
 .log {

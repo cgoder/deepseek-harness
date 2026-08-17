@@ -12,7 +12,8 @@ dsh 启动命令按以下顺序解析：
 
 1. `POWERD_DSH_BIN`（外加可选的空格分隔参数 `POWERD_DSH_ARGS`）——显式覆盖，任何构建都生效。可用于让发布构建指向本地构建的 dsh。
 2. Debug 构建（`tauri dev`）：本仓库源码树，从仓库根执行 `node --import tsx/esm apps/cli/src/bin.ts`，对仓库的修改下次启动即生效。
-3. Release 构建（`tauri build`）：安装到固定目录的 `@deepseek-ai/dsh` npm 包，`npm install --prefix ~/.powerd/dsh`，首次使用时拉取、之后复用。升级按钮以 `@latest` 标签重跑该安装。
+3. Release 构建（`tauri build`）：PATH 上的系统 dsh（例如 `npm install -g @deepseek-ai/dsh`），保证全局安装的 dsh 是唯一来源，PowerD 不会重复下载第二份；此时应用内升级按钮禁用，改用 `npm install -g @deepseek-ai/dsh@latest` 升级。
+4. Release 构建：安装到固定目录的 `@deepseek-ai/dsh` npm 包，`npm install --prefix ~/.powerd/dsh`，首次使用时拉取、之后复用；升级按钮以 `@latest` 标签重跑该安装。首次下载时应用窗口会显示醒目的安装横幅。
 
 用固定目录的 npm install 取代 npx：npm 的 exec 运行器有一个已知 bug（npm/cli#9870），它通过 `sh -c <bin>` 启动包 bin 却不把 npx 缓存 bin 目录放进子进程 PATH，因此当前 npm 下 `npx --yes @deepseek-ai/dsh` 必然报 `command not found`。安装到固定前缀并直接 spawn 已安装的 bin 路径，绕开这个坏掉的 shim，同时保留"始终拉取最新 npm 发布版"的行为。
 
@@ -25,7 +26,7 @@ dsh 启动命令按以下顺序解析：
 
 ## 最终用户机器要求
 
-运行打包后应用的机器需要 Node.js ≥ 22.19 与 npm。首次启动会通过 npm 将 `@deepseek-ai/dsh` 包安装到 `~/.powerd/dsh`（Windows 为 `%USERPROFILE%\.powerd\dsh`）；dsh 本身从不单独安装。没有 Node.js 时首次安装会失败，具体 npm 报错显示在 CLI 日志页签。
+运行打包后应用的机器需要 Node.js ≥ 22.19 与 npm。若系统已全局安装 dsh（PATH 中可见），PowerD 直接使用它、不再下载；否则首次启动会通过 npm 将 `@deepseek-ai/dsh` 包安装到 `~/.powerd/dsh`（Windows 为 `%USERPROFILE%\.powerd\dsh`），窗口内会显示下载横幅。没有 Node.js 时首次安装会失败，具体 npm 报错显示在 CLI 日志页签。
 
 - macOS：应用优先使用检测到的 fnm 默认版本，否则回退到 PATH 上的 `node`/`npm`。
 - Windows：应用会把标准安装目录（`Program Files\nodejs`、`%LOCALAPPDATA%\Programs\nodejs`）合并进子进程 PATH；自定义 Node 安装（如 nvm-windows）需自行在 PATH 中。

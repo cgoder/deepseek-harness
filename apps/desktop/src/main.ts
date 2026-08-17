@@ -17,13 +17,38 @@ interface UpgradeReply {
   message: string
 }
 
+/** Shape of the `DshInfo` struct returned by `dsh_info`. */
+interface DshInfo {
+  source: string
+  version: string
+  can_upgrade: boolean
+}
+
 let PORT = 3080 // default; refined from Rust (--port arg / POWERD_PORT env)
 let APP_URL = `http://127.0.0.1:${PORT}`
+let dshSource = '' // 'local' | 'override' | 'system' | 'cached' | 'missing'
+let dshCanUpgrade = false
+const SOURCE_LABELS: Record<string, string> = {
+  local: '本地源码',
+  override: '自定义路径',
+  system: '系统安装',
+  cached: '应用内置',
+  missing: '未安装',
+}
 
 // eslint-disable-next-line typescript/no-unnecessary-type-parameters -- the element type lives at the call site
 function q<T extends HTMLElement>(sel: string): T {
   return document.querySelector(sel) as T
 }
+
+// Frontend runtime errors land in the PowerD log file so a non-starting
+// window still reports what broke in the webview.
+window.addEventListener('error', (e) => {
+  void invoke('log_error', { message: 'JS error: ' + e.message }).catch(() => {})
+})
+window.addEventListener('unhandledrejection', (e) => {
+  void invoke('log_error', { message: 'unhandled rejection: ' + String(e.reason) }).catch(() => {})
+})
 
 const iframe = q<HTMLIFrameElement>('#app-iframe')
 const loading = q<HTMLDivElement>('#loading')
@@ -150,6 +175,10 @@ async function restart(): Promise<void> {
 
 async function upgrade(): Promise<void> {
   if (upgrading) return
+  if (!dshCanUpgrade) {
+    appendLog('> 当前使用的 dsh 不由 PowerD 管理，无法应用内升级', 'err')
+    return
+  }
   upgrading = true
   const btn = q<HTMLButtonElement>('#btn-upgrade')
   btn.disabled = true
@@ -241,6 +270,15 @@ async function setupEvents(): Promise<void> {
     if (!ready) setLoading('服务已停止', { spinner: false })
     setStatus('stopped', '已停止')
   })
+  await listen('dsh:installing', () => {
+    // First-run: the backend is downloading dsh into the fixed install dir.
+    setLoading(
+      '首次使用：正在下载安装 dsh（约 270 MB），请保持网络连接…\n安装详情见 CLI 页签',
+      { spinner: true },
+    )
+    setStatus('starting', '正在下载安装 dsh…')
+    appendLog('> 系统中未找到 dsh，PowerD 正在下载安装（npm install --prefix ~/.powerd/dsh）…', 'sys')
+  })
   await listen<string>('upgrade:stdout', (e2) => {
     appendLog(e2.payload, 'out')
   })
@@ -271,12 +309,38 @@ function setupButtons(): void {
   })
 }
 
+/**
+ * Where the dsh PowerD will run comes from; drives the upgrade button.
+ */
+async function setupDshInfo(): Promise<void> {
+  try {
+    const info = await invoke<DshInfo>('dsh_info')
+    dshSource = info.source
+    dshCanUpgrade = info.can_upgrade
+    const btn = q<HTMLButtonElement>('#btn-upgrade')
+    btn.disabled = !info.can_upgrade
+    if (!info.can_upgrade) {
+      btn.title =
+        info.source === 'system'
+          ? '当前使用系统安装的 dsh，请用 npm install -g @deepseek-ai/dsh@latest 升级'
+          : info.source === 'override'
+            ? '当前使用 POWERD_DSH_BIN 指定的 dsh，不适用应用内升级'
+            : '当前 dsh 不可升级'
+    } else {
+      btn.title = '升级应用内置的 dsh（npm install @latest）'
+    }
+  } catch {
+    // keep defaults: upgrade stays enabled pending the backend check
+  }
+}
+
 /** Show the dsh CLI version that will actually run (local source or npm package). */
 async function refreshDshVersion(): Promise<void> {
   const el = q<HTMLSpanElement>('#version')
   try {
     const v = await invoke<string>('dsh_version')
-    el.textContent = v && v !== 'unknown' ? 'dsh v' + v : 'dsh 未知'
+    el.textContent =
+      v && v !== 'unknown' ? `dsh v${v}${dshSource ? ' · ' + SOURCE_LABELS[dshSource] : ''}` : 'dsh 未知'
   } catch {
     el.textContent = 'dsh 未知'
   }
@@ -301,6 +365,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }, 5000)
     q('#version').textContent = 'dsh …'
     await setupEvents()
+    await setupDshInfo()
     try {
       const s = await invoke<ServerStatus>('server_status')
       if (s.running) {

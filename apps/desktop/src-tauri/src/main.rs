@@ -19,7 +19,40 @@ use std::os::unix::process::CommandExt;
 /// Default port for the dsh web server (overridable via `--port` arg or
 /// `POWERD_PORT` env var).
 const DEFAULT_PORT: u16 = 3080;
+
+/// Append one line to the PowerD log file the user can inspect when
+/// reporting problems.
+fn log_line(line: &str) {
+    use std::io::Write;
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| ".".to_string());
+    #[cfg(windows)]
+    let dir = std::path::PathBuf::from(&home).join(".powerd");
+    #[cfg(not(windows))]
+    let dir = std::path::PathBuf::from(&home).join("Library").join("Logs").join("PowerD");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("powerd.log"))
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 const PACKAGE: &str = "@deepseek-ai/dsh";
+/// Known fnm binary locations probed before falling back to PATH lookup,
+/// so Finder/Dock launches (which carry a minimal PATH) still find the
+/// node-family tools and a system-wide dsh on the fnm-managed Node.
+#[cfg_attr(windows, allow(dead_code))]
+const FNM_CANDIDATES: [&str; 3] = [
+    "/opt/homebrew/bin/fnm",
+    "/opt/homebrew/opt/fnm/bin/fnm",
+    "/usr/local/bin/fnm",
+];
 /// npm-install timeout for the first install and for upgrades. Downloads can
 /// take minutes on slow networks; the readiness poll below keeps the UI
 /// informed during the wait.
@@ -82,6 +115,44 @@ struct UpgradeResult {
     message: String,
 }
 
+/// Where the dsh binary PowerD will run comes from. Drives the version chip,
+/// the upgrade button, and the first-run install banner.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DshSource {
+    /// Debug builds: the repo's own source tree.
+    Local,
+    /// `POWERD_DSH_BIN` (+ `POWERD_DSH_ARGS`) override.
+    Override,
+    /// A system-wide install found on PATH (e.g. `npm install -g`).
+    System,
+    /// The fixed install dir (`POWERD_INSTALL_DIR` / `~/.powerd/dsh`).
+    Cached,
+    /// Nothing usable yet; first start will download.
+    Missing,
+}
+
+impl DshSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Override => "override",
+            Self::System => "system",
+            Self::Cached => "cached",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+/// Current dsh provenance reported to the frontend.
+#[derive(Clone, serde::Serialize)]
+struct DshInfo {
+    source: String,
+    version: String,
+    can_upgrade: bool,
+}
+
 /// Base launcher for node-family CLIs (node / npx / npm).
 ///
 /// macOS: prefers an explicit fnm path so the app also works when launched
@@ -97,11 +168,7 @@ struct UpgradeResult {
 fn base_launcher(bin: &str) -> Command {
     #[cfg(unix)]
     {
-        for fnm in [
-            "/opt/homebrew/bin/fnm",
-            "/opt/homebrew/opt/fnm/bin/fnm",
-            "/usr/local/bin/fnm",
-        ] {
+        for fnm in FNM_CANDIDATES {
             if Path::new(fnm).is_file() {
                 let mut c = Command::new(fnm);
                 c.args(["exec", "--using", "default", "--", bin]);
@@ -187,6 +254,121 @@ fn installed_dsh_bin() -> Option<PathBuf> {
     bin.is_file().then_some(bin)
 }
 
+/// Resolve a system-wide dsh executable (e.g. `npm install -g`) so a
+/// globally installed dsh stays the single source of truth. The GUI-launched
+/// process may carry a minimal PATH, so the search also probes the same
+/// fnm-resolved environment `base_launcher` would use.
+#[cfg(not(debug_assertions))]
+fn system_dsh_bin() -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        let probe = |args: &[&str]| -> Option<PathBuf> {
+            let out = Command::new(args[0]).args(&args[1..]).output().ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            let line = String::from_utf8_lossy(&out.stdout);
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            Path::new(line).is_file().then(|| PathBuf::from(line))
+        };
+        if let Some(p) = probe(&["sh", "-c", "command -v dsh || true"]) {
+            return Some(p);
+        }
+        for fnm in FNM_CANDIDATES {
+            if Path::new(fnm).is_file() {
+                if let Some(p) =
+                    probe(&[fnm, "exec", "--using", "default", "--", "sh", "-c", "command -v dsh || true"])
+                {
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "where dsh"]);
+        augment_path_with_node(&mut cmd);
+        hide_console(&mut cmd);
+        let out = cmd.output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&out.stdout);
+        line.lines().next().filter(|l| !l.is_empty()).map(PathBuf::from)
+    }
+}
+
+/// The dsh invocation resolved without triggering a first-use install:
+/// `POWERD_DSH_BIN` override, then a system-wide dsh, then the fixed
+/// install dir. None means nothing usable exists yet and the caller decides
+/// whether to download.
+fn resolved_dsh_command() -> Option<Command> {
+    if let Ok(bin) = std::env::var("POWERD_DSH_BIN") {
+        let mut c = Command::new(&bin);
+        if let Ok(args) = std::env::var("POWERD_DSH_ARGS") {
+            c.args(args.split_whitespace());
+        }
+        return Some(c);
+    }
+    #[cfg(debug_assertions)]
+    if let Some(c) = local_source_command() {
+        return Some(c);
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        if let Some(bin) = system_dsh_bin() {
+            return Some(base_launcher(bin.to_str()?));
+        }
+        if let Some(bin) = installed_dsh_bin() {
+            return Some(base_launcher(bin.to_str()?));
+        }
+    }
+    None
+}
+
+/// Run the resolved dsh with `--version` and extract the semver, without
+/// downloading anything on first use. Returns "unknown" when nothing is
+/// installed yet or the probe fails.
+fn run_dsh_version() -> String {
+    let mut cmd = match resolved_dsh_command() {
+        Some(c) => c,
+        None => return "unknown".to_string(),
+    };
+    cmd.args(["--version"]);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+    let lines: Vec<String> = match cmd.spawn().and_then(|c| c.wait_with_output()) {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect(),
+        Err(_) => return "unknown".to_string(),
+    };
+    extract_version(&lines).unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Where the dsh binary PowerD will run comes from, without triggering an
+/// install.
+#[cfg(not(debug_assertions))]
+fn dsh_source() -> DshSource {
+    if std::env::var("POWERD_DSH_BIN").is_ok() {
+        return DshSource::Override;
+    }
+    if system_dsh_bin().is_some() {
+        return DshSource::System;
+    }
+    if installed_dsh_bin().is_some() {
+        return DshSource::Cached;
+    }
+    DshSource::Missing
+}
+
+#[cfg(debug_assertions)]
+fn dsh_source() -> DshSource {
+    DshSource::Local
+}
+
 /// Spawn npm (via the fnm-aware base launcher) and emit its stdout/stderr
 /// through `server:stdout`/`server:stderr` so the CLI log panel shows the
 /// install progress. Blocks until the child exits.
@@ -250,6 +432,7 @@ fn ensure_dsh_installed(app: &AppHandle) -> Result<PathBuf, String> {
     }
     let dir = install_dir();
     let prefix = dir.to_str().ok_or_else(|| "安装目录路径无效".to_string())?;
+    let _ = app.emit("dsh:installing", ());
     let _ = app.emit("server:stdout", format!("$ npm install --prefix {prefix} {PACKAGE}"));
     run_npm(app, &["install", "--prefix", prefix, "--no-audit", "--no-fund", PACKAGE], INSTALL_TIMEOUT)?;
     installed_dsh_bin().ok_or_else(|| format!("dsh 已安装但未找到 bin：{}", dir.display()))
@@ -287,28 +470,48 @@ fn local_source_command() -> Option<Command> {
 ///    `POWERD_DSH_ARGS`) — explicit override in any build.
 /// 2. Debug builds: the local source tree (`node --import tsx/esm
 ///    apps/cli/src/bin.ts`) when present, so repo edits show up instantly.
-/// 3. Release builds: the dsh npm package installed into `install_dir()`,
-///    downloading it on first use.
+/// 3. Release builds: a system-wide dsh on PATH (e.g. `npm install -g`),
+///    so a globally installed dsh stays the single source of truth and
+///    PowerD never downloads a second copy.
+/// 4. Release builds: the dsh npm package installed into `install_dir()`,
+///    downloading it on first use when nothing else exists.
 /// `web --port <resolved>` is always appended by the caller.
 #[cfg_attr(debug_assertions, allow(unused_variables))]
 fn dsh_base_command(app: &AppHandle) -> Result<Command, String> {
-    if let Ok(bin) = std::env::var("POWERD_DSH_BIN") {
-        let mut c = Command::new(&bin);
-        if let Ok(args) = std::env::var("POWERD_DSH_ARGS") {
-            c.args(args.split_whitespace());
-        }
-        return Ok(c);
-    }
-    #[cfg(debug_assertions)]
-    if let Some(c) = local_source_command() {
+    if let Some(c) = resolved_dsh_command() {
+        log_line(&format!(
+            "dsh source: {}",
+            std::env::var("POWERD_DSH_BIN").is_ok()
+                .then(|| "override".to_string())
+                .or_else(|| {
+                    #[cfg(not(debug_assertions))]
+                    {
+                        system_dsh_bin().map(|_| "system".to_string())
+                    }
+                    #[cfg(debug_assertions)]
+                    None
+                })
+                .or_else(|| {
+                    #[cfg(not(debug_assertions))]
+                    {
+                        installed_dsh_bin().map(|_| "cached".to_string())
+                    }
+                    #[cfg(debug_assertions)]
+                    None
+                })
+                .unwrap_or_else(|| "local/npx".to_string())
+        ));
         return Ok(c);
     }
     #[cfg(not(debug_assertions))]
     {
+        log_line("dsh source: missing -> downloading");
         let bin = ensure_dsh_installed(app)?;
         let bin = bin.to_str().ok_or_else(|| "dsh bin 路径无效".to_string())?.to_string();
         return Ok(base_launcher(&bin));
     }
+    // Debug builds only: resolved_dsh_command covered the local source tree;
+    // the npx fallback fires when that bin is absent (e.g. a release tree).
     #[cfg(debug_assertions)]
     {
         let mut c = base_launcher("npx");
@@ -324,15 +527,6 @@ fn dsh_command(app: &AppHandle) -> Result<Command, String> {
     let mut c = dsh_base_command(app)?;
     let port = resolve_port().to_string();
     c.args(["web", "--port", &port]);
-    Ok(c)
-}
-
-/// `dsh --version` — prints the version of the dsh that this build will run
-/// (local source in debug builds, npm package in release builds).
-fn dsh_version_command(app: &AppHandle) -> Result<Command, String> {
-    let mut c = dsh_base_command(app)?;
-    c.args(["--version"]);
-    c.env("npm_config_update_notifier", "false");
     Ok(c)
 }
 
@@ -429,6 +623,7 @@ fn start_internal(app: &AppHandle) -> Result<Status, String> {
     let mut cmd = dsh_command(app)?;
     #[cfg(debug_assertions)]
     eprintln!("[powerd] spawning: {cmd:?}");
+    log_line(&format!("start_internal: spawning {:?}", cmd.get_program().to_string_lossy()));
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {
@@ -565,23 +760,32 @@ async fn upgrade_dsh(app: AppHandle) -> Result<UpgradeResult, String> {
 
     #[cfg(not(debug_assertions))]
     {
+        let source = dsh_source();
+        if source != DshSource::Cached {
+            return Ok(UpgradeResult {
+                ok: false,
+                version: run_dsh_version(),
+                restarted: false,
+                message: match source {
+                    DshSource::Override => {
+                        "当前使用 POWERD_DSH_BIN 指定的 dsh，不适用应用内升级".to_string()
+                    }
+                    DshSource::System => {
+                        "当前使用系统安装的 dsh，请用 `npm install -g @deepseek-ai/dsh@latest` 升级".to_string()
+                    }
+                    DshSource::Missing => "当前未安装 dsh，无升级目标".to_string(),
+                    _ => "当前环境不支持应用内升级".to_string(),
+                },
+            });
+        }
+
         let _ = app.emit("server:stdout", format!("$ npm install --prefix {} {PACKAGE}@latest", install_dir().display()));
         match run_npm(&app, &["install", "--prefix", install_dir().to_str().unwrap_or_default(), "--no-audit", "--no-fund", &format!("{PACKAGE}@latest")], INSTALL_TIMEOUT) {
             Ok(()) => {}
             Err(e) => return Ok(UpgradeResult { ok: false, version: "unknown".to_string(), restarted: false, message: format!("升级失败：{e}") }),
         }
 
-        let version = match dsh_version_command(&app) {
-            Ok(mut cmd) => {
-                cmd.stdout(Stdio::piped()).stderr(Stdio::null());
-                let lines = match cmd.spawn().and_then(|c| c.wait_with_output()) {
-                    Ok(out) => String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect(),
-                    Err(_) => Vec::new(),
-                };
-                extract_version(&lines).unwrap_or_else(|| "unknown".to_string())
-            }
-            Err(_) => "unknown".to_string(),
-        };
+        let version = run_dsh_version();
 
         let owns = app.state::<ServerState>().pid.lock().unwrap().is_some();
         let mut restarted = false;
@@ -609,19 +813,31 @@ async fn upgrade_dsh(app: AppHandle) -> Result<UpgradeResult, String> {
 /// Report the dsh CLI version that this build will actually run
 /// (local source in debug builds, npm package in release builds).
 #[tauri::command]
-async fn dsh_version(app: AppHandle) -> Result<String, String> {
-    let mut cmd = dsh_version_command(&app)?;
-    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("无法获取 dsh 版本：{e}"))?;
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("读取 dsh 版本失败：{e}"))?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
-    let version = extract_version(&lines).unwrap_or_else(|| "unknown".to_string());
-    Ok(version)
+async fn dsh_version() -> String {
+    let version = run_dsh_version();
+    log_line(&format!("dsh_version: {version}"));
+    version
+}
+
+/// Report where the dsh PowerD will run comes from, plus whether the
+/// in-app upgrade button applies. Never triggers a download.
+#[tauri::command]
+fn dsh_info() -> DshInfo {
+    let source = dsh_source();
+    let version = run_dsh_version();
+    log_line(&format!("dsh_info: source={} version={}", source.as_str(), version));
+    DshInfo {
+        source: source.as_str().to_string(),
+        version,
+        can_upgrade: source == DshSource::Cached,
+    }
+}
+
+/// Frontend runtime errors land in the same log file, so a non-starting
+/// window still reports what broke in the webview.
+#[tauri::command]
+fn log_error(message: String) {
+    log_line(&format!("[frontend] {message}"));
 }
 
 #[tauri::command]
@@ -638,6 +854,7 @@ fn get_port() -> u16 {
 }
 
 fn main() {
+    log_line(&format!("powerd starting (build {})", env!("CARGO_PKG_VERSION")));
     tauri::Builder::default()
         .manage(ServerState { pid: Mutex::new(None) })
         .invoke_handler(tauri::generate_handler![
@@ -647,6 +864,8 @@ fn main() {
             server_status,
             upgrade_dsh,
             dsh_version,
+            dsh_info,
+            log_error,
             get_port
         ])
         .on_window_event(|window, event| {
