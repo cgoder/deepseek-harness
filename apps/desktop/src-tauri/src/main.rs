@@ -170,9 +170,15 @@ fn install_dir() -> PathBuf {
     PathBuf::from(home).join(".powerd").join("dsh")
 }
 
-/// Absolute path of the installed dsh bin, when present.
+/// Absolute path of the installed dsh bin, when present. On Windows npm
+/// installs `.cmd` shims; the extensionless POSIX shim is not executable by
+/// CreateProcess, so prefer the `.cmd` entry and let the base launcher run it
+/// through `cmd /C`.
 #[cfg(not(debug_assertions))]
 fn installed_dsh_bin() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let bin = install_dir().join("node_modules").join(".bin").join("dsh.cmd");
+    #[cfg(not(windows))]
     let bin = install_dir().join("node_modules").join(".bin").join("dsh");
     bin.is_file().then_some(bin)
 }
