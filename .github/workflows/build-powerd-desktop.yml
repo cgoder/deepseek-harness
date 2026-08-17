@@ -83,11 +83,21 @@ jobs:
         working-directory: ${{ env.POWERD_PROJECT }}
         run: pnpm exec tauri build --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
 
+      - name: List bundle outputs
+        shell: bash
+        run: |
+          find apps/desktop/src-tauri/target -type d -name bundle -print
+          find apps/desktop/src-tauri/target -name '*.dmg' -o -name '*.exe' | head -20
+
       - name: Upload bundles
         uses: actions/upload-artifact@v7
         with:
           name: powerd-${{ matrix.name }}
-          path: apps/desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/**/*.{dmg,exe}
+          # The triple-scoped path is the canonical tauri layout; the wider
+          # fallback covers host-target bundles that live under target/release.
+          path: |
+            apps/desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/**/*.{dmg,exe}
+            apps/desktop/src-tauri/target/**/bundle/**/*.{dmg,exe}
           if-no-files-found: error
           retention-days: 14
 
