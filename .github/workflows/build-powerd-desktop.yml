@@ -95,7 +95,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist-bundles
-          find apps/desktop/src-tauri/target -type f \( -name '*.dmg' -o -name '*.exe' \) -exec cp {} dist-bundles/ \;
+          # Only tauri's bundle outputs (dmg/, nsis/ under any bundle dir);
+          # the plain *.exe find also swept build-script and binary artifacts
+          # from target/ into the release.
+          find apps/desktop/src-tauri/target -type f -path '*/bundle/*' \( -name '*.dmg' -o -name '*.exe' \) -exec cp {} dist-bundles/ \;
           ls -la dist-bundles
 
       - name: Upload bundles
