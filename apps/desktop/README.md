@@ -26,7 +26,7 @@ The dedicated npm install replaces `npx`: npm's exec runner has a known bug (npm
 
 ## End-user requirements
 
-A machine running the packaged app needs Node.js ≥ 22.19 with npm. The first launch installs the `@deepseek-ai/dsh` package into `~/.powerd/dsh` (`%USERPROFILE%\.powerd\dsh` on Windows) via npm; dsh itself is never installed separately. Without Node.js the first-launch install fails with the npm error shown in the CLI log tab.
+A machine running the packaged app needs Node.js ≥ 22.19 with npm. The first launch installs the `@deepseek-ai/dsh` package into `~/.powerd/dsh` (`%USERPROFILE%\.powerd\dsh` on Windows) via npm; dsh itself is never installed separately. Without Node.js the first-launch install fails with the npm error shown in the CLI log tab. PowerD also verifies the Node version before launching dsh (dsh needs ≥ 22.5: `node:zlib` zstd and `Promise.withResolvers`): an older Node is rejected up front with an upgrade hint instead of failing deep inside dsh with a "plugin tree failed to load" report.
 
 - macOS: the app prefers a detected fnm default version, then falls back to `node`/`npm` on PATH.
 - Windows: the app merges the standard install dirs (`Program Files\nodejs`, `%LOCALAPPDATA%\Programs\nodejs`) into the child PATH; a custom Node install (e.g. nvm-windows) must be on PATH itself.

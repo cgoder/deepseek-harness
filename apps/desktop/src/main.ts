@@ -365,7 +365,8 @@ window.addEventListener('DOMContentLoaded', () => {
     }, 5000)
     q('#version').textContent = 'dsh …'
     await setupEvents()
-    await setupDshInfo()
+    // Start the server first: dsh_info is pure UI provenance and must not
+    // gate the launch path, so it runs after start and never blocks it.
     try {
       const s = await invoke<ServerStatus>('server_status')
       if (s.running) {
@@ -378,5 +379,6 @@ window.addEventListener('DOMContentLoaded', () => {
     } catch {
       await start()
     }
+    void setupDshInfo()
   })()
 })

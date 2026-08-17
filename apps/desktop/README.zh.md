@@ -26,7 +26,7 @@ dsh 启动命令按以下顺序解析：
 
 ## 最终用户机器要求
 
-运行打包后应用的机器需要 Node.js ≥ 22.19 与 npm。若系统已全局安装 dsh（PATH 中可见），PowerD 直接使用它、不再下载；否则首次启动会通过 npm 将 `@deepseek-ai/dsh` 包安装到 `~/.powerd/dsh`（Windows 为 `%USERPROFILE%\.powerd\dsh`），窗口内会显示下载横幅。没有 Node.js 时首次安装会失败，具体 npm 报错显示在 CLI 日志页签。
+运行打包后应用的机器需要 Node.js ≥ 22.19 与 npm。若系统已全局安装 dsh（PATH 中可见），PowerD 直接使用它、不再下载；否则首次启动会通过 npm 将 `@deepseek-ai/dsh` 包安装到 `~/.powerd/dsh`（Windows 为 `%USERPROFILE%\.powerd\dsh`），窗口内会显示下载横幅。没有 Node.js 时首次安装会失败，具体 npm 报错显示在 CLI 日志页签。PowerD 启动 dsh 前还会校验 Node 版本（dsh 需要 ≥ 22.5：`node:zlib` zstd 与 `Promise.withResolvers`）：旧版 Node 会在启动前被拦截并提示升级，而不是在 dsh 内部以 "plugin tree failed to load" 报告失败。
 
 - macOS：应用优先使用检测到的 fnm 默认版本，否则回退到 PATH 上的 `node`/`npm`。
 - Windows：应用会把标准安装目录（`Program Files\nodejs`、`%LOCALAPPDATA%\Programs\nodejs`）合并进子进程 PATH；自定义 Node 安装（如 nvm-windows）需自行在 PATH 中。

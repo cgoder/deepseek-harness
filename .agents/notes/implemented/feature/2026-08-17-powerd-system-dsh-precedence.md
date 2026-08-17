@@ -56,6 +56,13 @@ nvm/Homebrew-installed dsh in `fnm exec` would run it under whatever Node
 fnm manages — a different major version or a different manager's install.
 The cached install keeps the `base_launcher` wrapper, because
 `~/.powerd/dsh` contains no Node of its own.
+
+Before any spawn, `start_internal` verifies the resolved Node is ≥ 22.5
+(dsh's compiled code imports `node:zlib` zstd APIs from 22.5 and uses
+`Promise.withResolvers` from 22.0). An older Node would otherwise fail
+inside dsh with a cryptic "plugin tree failed to load" report
+(`@deepseek-ai/dsh-session` never activates and every client plugin stays
+pending); the check fails fast with an upgrade hint instead.
 switch to a system dsh — no automatic deletion of user data.
 
 The resolution chain (including `dsh_info`/`dsh_version`, which never
@@ -102,6 +109,18 @@ Three end-to-end scenarios were exercised against a release bundle
  non-fnm Node would still trigger a download), the probe list was extended
  as described above; a real `npm install -g @deepseek-ai/dsh` install is
  now resolved as `source=system` with zero download, and the
-`/opt/homebrew/bin` probe was verified against a fake dsh there. Both
-`cargo check` profiles compile clean and the frontend passes
-`tsc --noEmit` + `vite build`.
+ `/opt/homebrew/bin` probe was verified against a fake dsh there. After
+ the v0.1.2 field report (users on nvm-managed or otherwise-managed Node
+ failed at launch), the spawn path was reworked as described: nvm
+ (`~/.nvm/versions/node/*/bin`) and Homebrew (`/opt/homebrew/bin`)
+ stand-ins now spawn directly with their own bin dir first on PATH,
+ verified against the real global install too. After the v0.1.3 field
+ report (a fresh user's web UI showed "34 entries did not activate
+ @deepseek-ai/dsh-session"), running dsh under Node 20 reproduced the
+ exact loader failures (`node:zlib` has no `createZstdDecompress` before
+ 22.5; `Promise.withResolvers` is missing before 22.0); the node version
+ check now rejects < 22.5 before any download or spawn, verified by
+ pointing PATH at a Node 20 binary (check failed, zero download) and by
+ the normal-environment regression (service HTTP 200). Both `cargo check`
+ profiles compile clean and the frontend passes `tsc --noEmit` +
+ `vite build`.

@@ -157,29 +157,70 @@ struct DshInfo {
 /// Windows: GUI-launched processes may inherit a stale PATH (Node.js not
 /// visible), and Rust's Command::new("npx") cannot resolve the npx.cmd
 /// batch shim the way cmd.exe does. So run through "cmd /C npx ..." —
-/// exactly like a user typing it in a terminal — and merge the standard
-/// Node.js install directories into PATH as a safety net. The console is
-/// kept hidden so no cmd window flashes up.
-fn base_launcher(bin: &str) -> Command {
+/// Run `bin` (an absolute path) with `node_dir` first on PATH, so shebangs
+/// (`#!/usr/bin/env node`) and node-by-name shims resolve to the Node that
+/// belongs to the install — under fnm, nvm, Homebrew or nodejs.org alike.
+fn launcher(bin: &str, node_dir: Option<&Path>) -> Command {
     #[cfg(unix)]
     {
-        for fnm in FNM_CANDIDATES {
-            if Path::new(fnm).is_file() {
-                let mut c = Command::new(fnm);
-                c.args(["exec", "--using", "default", "--", bin]);
-                return c;
-            }
+        let mut c = Command::new(bin);
+        if let Some(dir) = node_dir {
+            let dir = dir.to_string_lossy().to_string();
+            let path = match std::env::var("PATH") {
+                Ok(p) if !p.is_empty() => format!("{dir}:{p}"),
+                _ => dir,
+            };
+            c.env("PATH", path);
         }
-        Command::new(bin)
+        c
     }
     #[cfg(windows)]
     {
         let mut c = Command::new("cmd");
         c.args(["/C", bin]);
-        augment_path_with_node(&mut c);
         hide_console(&mut c);
+        let mut dirs: Vec<String> = Vec::new();
+        if let Some(dir) = node_dir {
+            dirs.push(dir.to_string_lossy().to_string());
+        }
+        // Standard Node install dirs merged in as a safety net.
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            if let Ok(base) = std::env::var(var) {
+                let candidate = if var == "LOCALAPPDATA" {
+                    format!("{base}/Programs/nodejs")
+                } else {
+                    format!("{base}/nodejs")
+                };
+                if Path::new(&candidate).is_dir() {
+                    dirs.push(candidate);
+                }
+            }
+        }
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let candidate = format!("{appdata}\\npm");
+            if Path::new(&candidate).is_dir() {
+                dirs.push(candidate);
+            }
+        }
+        if !dirs.is_empty() {
+            let mut path = dirs.join(";");
+            if let Ok(p) = std::env::var("PATH") {
+                if !p.is_empty() {
+                    path.push(';');
+                    path.push_str(&p);
+                }
+            }
+            c.env("PATH", path);
+        }
         c
     }
+}
+
+/// Launch a node-family CLI (`node`/`npm`/a dsh bin) with a system Node's
+/// bin dir prepended to PATH. Used for installs that ship no Node of their
+/// own (the fixed `~/.powerd/dsh` cache).
+fn base_launcher(bin: &str) -> Command {
+    launcher(bin, find_bin("node").and_then(|n| n.parent().map(Path::to_path_buf)).as_deref())
 }
 
 #[cfg(windows)]
@@ -247,14 +288,12 @@ fn installed_dsh_bin() -> Option<PathBuf> {
     bin.is_file().then_some(bin)
 }
 
-/// Resolve a system-wide dsh executable (e.g. `npm install -g`) so a
-/// globally installed dsh stays the single source of truth. The GUI-launched
-/// process may carry a minimal PATH, so the search probes, in order: the
-/// current PATH, the fnm-resolved environment `base_launcher` would use,
-/// the well-known npm global bin directories for other Node installs
-/// (Homebrew / nodejs.org / nvm), and the resolved `npm prefix -g`.
-#[cfg(not(debug_assertions))]
-fn system_dsh_bin() -> Option<PathBuf> {
+/// Find an executable (dsh / npm / node) across every Node installation
+/// PowerD can reach, in order: the current PATH, the fnm-managed default
+/// environment (Finder/Dock launches carry a minimal PATH), the Homebrew
+/// and nodejs.org bin dirs, nvm version dirs, and on Windows the standard
+/// npm/Node install dirs. Never consults shell-only env vars.
+fn find_bin(name: &str) -> Option<PathBuf> {
     #[cfg(unix)]
     {
         let probe = |args: &[&str]| -> Option<PathBuf> {
@@ -269,114 +308,118 @@ fn system_dsh_bin() -> Option<PathBuf> {
             }
             Path::new(line).is_file().then(|| PathBuf::from(line))
         };
-        // 1. Current PATH (terminal-launched processes carry it).
-        if let Some(p) = probe(&["sh", "-c", "command -v dsh || true"]) {
+        let which = format!("command -v {name} || true");
+        if let Some(p) = probe(&["sh", "-c", &which]) {
             return Some(p);
         }
-        // 2. The fnm-managed default Node environment (Finder/Dock launches
-        //    carry a minimal PATH, and npm -g installs land in the fnm node
-        //    bin dir when fnm owns Node).
         for fnm in FNM_CANDIDATES {
             if Path::new(fnm).is_file() {
-                if let Some(p) =
-                    probe(&[fnm, "exec", "--using", "default", "--", "sh", "-c", "command -v dsh || true"])
-                {
+                if let Some(p) = probe(&[fnm, "exec", "--using", "default", "--", "sh", "-c", &which]) {
                     return Some(p);
                 }
             }
         }
-        // 3. Well-known npm global bin dirs for Node installs fnm does not
-        //    manage (Homebrew node / nodejs.org installer).
-        for p in [
-            "/opt/homebrew/bin/dsh",
-            "/usr/local/bin/dsh",
-        ] {
-            if Path::new(p).is_file() {
-                return Some(PathBuf::from(p));
+        for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            let p = Path::new(dir).join(name);
+            if p.is_file() {
+                return Some(p);
             }
         }
-        // 4. nvm-managed Node installs (`~/.nvm/versions/node/<v>/bin`).
-        if let Some(nvm_bin) = home_dir().map(|h| h.join(".nvm").join("versions").join("node")) {
-            if let Ok(entries) = std::fs::read_dir(&nvm_bin) {
+        if let Some(nvm) = home_dir().map(|h| h.join(".nvm").join("versions").join("node")) {
+            if let Ok(entries) = std::fs::read_dir(&nvm) {
                 if let Some(p) = entries
                     .flatten()
-                    .map(|e| e.path().join("bin").join("dsh"))
+                    .map(|e| e.path().join("bin").join(name))
                     .find(|p| p.is_file())
                 {
                     return Some(p);
                 }
             }
         }
-        // 5. The user's configured npm global root (`npm prefix -g`), which
-        //    covers custom prefixes outside every well-known location.
-        if let Some(prefix) = npm_global_prefix() {
-            let p = prefix.join("bin").join("dsh");
-            if p.is_file() {
-                return Some(p);
-            }
-        }
         None
     }
     #[cfg(windows)]
     {
-        // 1. `where dsh` over PATH plus the standard Node install dirs.
+        // 1. `where` over PATH plus the standard Node install dirs
+        //    (Windows GUI processes inherit the full user PATH, unlike
+        //    macOS, so this catches nvm-windows and custom installs).
         let mut cmd = Command::new("cmd");
-        cmd.args(["/C", "where dsh"]);
+        cmd.args(["/C", "where", name]);
         augment_path_with_node(&mut cmd);
         hide_console(&mut cmd);
-        let out = cmd.output().ok()?;
-        if out.status.success() {
-            let line = String::from_utf8_lossy(&out.stdout);
-            if let Some(p) = line.lines().next().filter(|l| !l.is_empty()) {
-                return Some(PathBuf::from(p));
+        if let Ok(out) = cmd.output() {
+            if out.status.success() {
+                let line = String::from_utf8_lossy(&out.stdout);
+                if let Some(p) = line.lines().next().filter(|l| !l.is_empty()) {
+                    return Some(PathBuf::from(p));
+                }
             }
         }
-        // 2. npm's default global bin dir for Windows (`%APPDATA%\npm`).
+        // 2. Standard npm/Node install dirs, with the platform shim suffix.
+        let mut candidates: Vec<PathBuf> = Vec::new();
         if let Ok(appdata) = std::env::var("APPDATA") {
-            let p = PathBuf::from(appdata).join("npm").join("dsh.cmd");
-            if p.is_file() {
-                return Some(p);
+            candidates.push(PathBuf::from(appdata).join("npm"));
+        }
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+            if let Ok(base) = std::env::var(var) {
+                let candidate = if var == "LOCALAPPDATA" {
+                    PathBuf::from(base).join("Programs").join("nodejs")
+                } else {
+                    PathBuf::from(base).join("nodejs")
+                };
+                candidates.push(candidate);
             }
         }
-        // 3. `npm prefix -g` (custom prefixes).
-        if let Some(prefix) = npm_global_prefix() {
-            let p = prefix.join("dsh.cmd");
-            if p.is_file() {
-                return Some(p);
+        let suffixes = ["", ".cmd", ".exe"];
+        for dir in candidates {
+            for suffix in suffixes {
+                let p = dir.join(format!("{name}{suffix}"));
+                if p.is_file() {
+                    return Some(p);
+                }
             }
         }
         None
     }
 }
 
-/// Resolve the user's npm global install root via `npm prefix -g`, probing
-/// the fnm-resolved environment first (GUI launches lack npm on PATH).
+/// Resolve a system-wide dsh executable (e.g. `npm install -g`) so a
+/// globally installed dsh stays the single source of truth, probing every
+/// known npm global bin location plus the user's `npm prefix -g` root.
+#[cfg(not(debug_assertions))]
+fn system_dsh_bin() -> Option<PathBuf> {
+    find_bin("dsh").or_else(|| {
+        let prefix = npm_global_prefix()?;
+        #[cfg(unix)]
+        let p = prefix.join("bin").join("dsh");
+        #[cfg(windows)]
+        let p = prefix.join("dsh.cmd");
+        p.is_file().then_some(p)
+    })
+}
+
+/// Resolve the user's npm global install root via `npm prefix -g`, running
+/// the resolved npm with its own bin dir prepended to PATH (GUI launches
+/// lack npm on PATH, and the fnm wrapper would run npm under the wrong
+/// Node for nvm/Homebrew installs).
 #[cfg(not(debug_assertions))]
 fn npm_global_prefix() -> Option<PathBuf> {
-    let run = |cmd: &mut Command| -> Option<PathBuf> {
-        let out = cmd.output().ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let s = String::from_utf8_lossy(&out.stdout);
-        let s = s.trim();
-        if s.is_empty() {
-            return None;
-        }
-        Some(PathBuf::from(s))
-    };
-    for fnm in FNM_CANDIDATES {
-        if Path::new(fnm).is_file() {
-            let mut c = Command::new(fnm);
-            c.args(["exec", "--using", "default", "--", "npm", "prefix", "-g"]);
-            if let Some(p) = run(&mut c) {
-                return Some(p);
-            }
-        }
+    let npm = find_bin("npm")?;
+    let dir = npm.parent()?;
+    let out = launcher(&npm.to_string_lossy(), Some(dir))
+        .args(["prefix", "-g"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
     }
-    let mut c = Command::new("npm");
-    c.args(["prefix", "-g"]);
-    run(&mut c)
+    let s = String::from_utf8_lossy(&out.stdout);
+    let s = s.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(s))
+    }
 }
 
 /// The OS home directory, honoring Windows' USERPROFILE.
@@ -387,26 +430,46 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Launch a system-wide dsh with its own Node environment. npm global
-/// installs place the dsh bin next to the Node that owns it (`npm prefix`
-/// equals the Node install root), so prepending the bin directory to PATH
-/// makes the `#!/usr/bin/env node` shebang resolve to the matching Node —
-/// nvm, Homebrew, nodejs.org and fnm installs each keep their own bin dir.
-/// `base_launcher` is deliberately NOT used here: its fnm wrapper would run
-/// the dsh under whatever Node fnm manages, which can be a different major
-/// version or a different manager's install.
-#[cfg(all(unix, not(debug_assertions)))]
-fn system_dsh_command(bin: &Path) -> Command {
-    let mut c = Command::new(bin);
-    if let Some(dir) = bin.parent() {
-        let dir = dir.to_string_lossy().to_string();
-        let path = match std::env::var("PATH") {
-            Ok(p) if !p.is_empty() => format!("{dir}:{p}"),
-            _ => dir,
-        };
-        c.env("PATH", path);
+/// Minimum Node.js the dsh package actually runs on: its compiled code
+/// imports `node:zlib` zstd APIs (added in 22.5) and uses
+/// `Promise.withResolvers` (22.0), so anything below 22.5 fails plugin
+/// loading with cryptic loader errors. The docs recommend ≥ 22.19.
+const MIN_NODE_VERSION: (u32, u32) = (22, 5);
+
+/// Parse `node --version` output (`v22.19.0`) into (major, minor).
+fn parse_node_version(v: &str) -> Option<(u32, u32)> {
+    let s = v.trim().strip_prefix('v')?;
+    let mut it = s.split('.');
+    let major = it.next()?.parse().ok()?;
+    let minor = it.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
+/// Verify the Node PowerD would run dsh with meets the dsh requirement,
+/// so an old Node fails with a clear message instead of the loader errors
+/// (`node:zlib` zstd / `Promise.withResolvers`) that surface as "plugin
+/// tree failed to load" from inside dsh.
+fn check_node_requirement() -> Result<String, String> {
+    let node = find_bin("node").ok_or_else(|| {
+        "未找到 Node.js：请先安装 Node.js ≥ 22.5（推荐 22.19+，nodejs.org，或 fnm / nvm / Homebrew）".to_string()
+    })?;
+    let out = launcher(&node.to_string_lossy(), node.parent())
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("无法运行 Node.js（{e}），请先安装 Node.js ≥ 22.5"))?;
+    if !out.status.success() {
+        return Err("无法运行 Node.js（node --version 失败）".to_string());
     }
-    c
+    let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let nums = parse_node_version(&v)
+        .ok_or_else(|| format!("无法解析 Node.js 版本：{v:?}"))?;
+    if nums < MIN_NODE_VERSION {
+        return Err(format!(
+            "检测到 Node.js {v}，dsh 需要 Node.js ≥ 22.5（依赖 node:zlib zstd 与 \
+             Promise.withResolvers）。请升级后重试：fnm install 22 / nvm install 22 / brew install node"
+        ));
+    }
+    Ok(v)
 }
 
 /// The dsh invocation resolved without triggering a first-use install:
@@ -428,19 +491,14 @@ fn resolved_dsh_command() -> Option<Command> {
     #[cfg(not(debug_assertions))]
     {
         if let Some(bin) = system_dsh_bin() {
-            #[cfg(unix)]
-            {
-                return Some(system_dsh_command(&bin));
-            }
-            #[cfg(windows)]
-            {
-                // dsh.cmd shims call `node` by name; base_launcher's cmd /C
-                // wrapper already augments PATH with the standard Node dirs.
-                return Some(base_launcher(bin.to_str()?));
-            }
+            // npm global installs place the dsh bin next to its owning
+            // Node, so prepending the bin dir lets the env node shebang
+            // resolve the matching Node under fnm, nvm, Homebrew or
+            // nodejs.org alike.
+            return Some(launcher(&bin.to_string_lossy(), bin.parent()));
         }
         if let Some(bin) = installed_dsh_bin() {
-            return Some(base_launcher(bin.to_str()?));
+            return Some(base_launcher(&bin.to_string_lossy()));
         }
     }
     None
@@ -489,7 +547,13 @@ fn dsh_source() -> DshSource {
 /// install progress. Blocks until the child exits.
 #[cfg(not(debug_assertions))]
 fn run_npm(app: &AppHandle, args: &[&str], timeout: Duration) -> Result<(), String> {
-    let mut cmd = base_launcher("npm");
+    // Resolve npm across every Node installation instead of relying on PATH
+    // or fnm: a Finder/Dock-launched process carries a minimal PATH, so a
+    // machine without fnm would fail with ENOENT here.
+    let npm = find_bin("npm").ok_or_else(|| {
+        "未找到 npm：请先安装 Node.js ≥ 22.19（nodejs.org，或 fnm / nvm / Homebrew）".to_string()
+    })?;
+    let mut cmd = launcher(&npm.to_string_lossy(), npm.parent());
     cmd.args(args);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
@@ -733,6 +797,14 @@ fn start_internal(app: &AppHandle) -> Result<Status, String> {
     if is_port_open(resolve_port()) {
         let _ = app.emit("server:ready", ());
         return Ok(status_of(true));
+    }
+
+    // Fail fast with a clear message when the Node PowerD would use is too
+    // old for dsh (node:zlib zstd needs ≥ 22.5), instead of surfacing the
+    // loader errors from inside dsh.
+    if let Err(e) = check_node_requirement() {
+        log_line(&format!("node requirement check failed: {e}"));
+        return Err(e);
     }
 
     let mut cmd = dsh_command(app)?;
