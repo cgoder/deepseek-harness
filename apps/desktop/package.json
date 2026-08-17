@@ -1,0 +1,23 @@
+{
+  "name": "@deepseek-ai/dsh-desktop",
+  "description": "Native desktop wrapper (Tauri 2) for the dsh web UI",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^6.0.3",
+    "vite": "^6.0.0"
+  },
+  "license": "MIT"
+}
