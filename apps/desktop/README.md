@@ -18,7 +18,7 @@ The dedicated npm install replaces `npx`: npm's exec runner has a known bug (npm
 
 ## Prerequisites
 
-- macOS (Apple Silicon or Intel; other platforms are untested).
+- macOS (Apple Silicon or Intel) is the primary development target; Windows installers are built by CI (see the CI builds section below).
 - Node.js ≥ 22.19 with pnpm (the repo's toolchain; the app resolves `node`/`npm` through fnm when present, otherwise through PATH).
 - Rust toolchain (Homebrew `rust` works) and Xcode Command Line Tools for the native build.
 - A `pnpm install` at the repository root (dependency resolution and, for debug builds, the `tsx` loader).
@@ -41,6 +41,16 @@ dmg/PowerD_<version>_aarch64.dmg
 ```
 
 The builds are unsigned; the first launch of a downloaded copy requires `sudo xattr -cr /Applications/DSH\ Desktop.app` or a Developer ID signature for distribution.
+
+## CI builds
+
+`.github/workflows/build-powerd-desktop.yml` builds the app on every push touching `apps/desktop` and on `powerd-v*` tags:
+
+- macOS Apple Silicon and Intel (`.dmg`) plus Windows x64 (NSIS `.exe`) run as a build matrix via `pnpm exec tauri build`.
+- A plain push uploads the installers as preview artifacts; a `powerd-v*` tag additionally drafts a GitHub Release with them attached. Windows builds run on a Windows runner, so no local Windows machine is needed.
+- The tag version must match `src-tauri/tauri.conf.json`'s `version`; bump both together.
+
+CI output is unsigned: the macOS build needs `xattr -cr` or a Developer ID, and the Windows installer needs a code-signing certificate before distribution.
 
 ## Port
 
@@ -82,6 +92,6 @@ apps/desktop/
 
 ## Limitations
 
-- macOS only for now; the Rust launcher keeps Windows branches (cmd /C + PATH augmentation) but no Windows build has run.
+- macOS is the primary target; Windows is built in CI (see the CI builds section), and the Rust launcher keeps the Windows branches (cmd /C + PATH augmentation, `taskkill` process trees, hidden console).
 - No system tray and no single-instance lock: a second launch competes for the same port (the running server wins by reuse).
 - The in-app upgrade button only exists in release builds; debug builds run the local source tree and reject it.

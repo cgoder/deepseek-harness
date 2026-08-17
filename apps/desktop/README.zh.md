@@ -18,7 +18,7 @@ dsh 启动命令按以下顺序解析：
 
 ## 环境要求
 
-- macOS（Apple Silicon 或 Intel；其它平台未测试）。
+- macOS（Apple Silicon 或 Intel）是主要开发目标；Windows 安装包由 CI 构建（见下方 CI 构建一节）。
 - Node.js ≥ 22.19 与 pnpm（仓库工具链；应用优先通过 fnm 解析 `node`/`npm`，否则走 PATH）。
 - Rust 工具链（Homebrew `rust` 可用）与 Xcode Command Line Tools，用于原生构建。
 - 仓库根执行过 `pnpm install`（依赖解析；debug 构建还需要 `tsx` loader）。
@@ -41,6 +41,16 @@ dmg/PowerD_<version>_aarch64.dmg
 ```
 
 构建未签名；下载分发的副本首次启动需 `sudo xattr -cr /Applications/DSH\ Desktop.app`，或使用 Developer ID 签名分发。
+
+## CI 构建
+
+`.github/workflows/build-powerd-desktop.yml` 在每次触碰 `apps/desktop` 的推送以及 `powerd-v*` tag 上构建应用：
+
+- macOS Apple Silicon 与 Intel（`.dmg`）以及 Windows x64（NSIS `.exe`）以构建矩阵方式通过 `pnpm exec tauri build` 产出。
+- 普通推送将安装包作为预览 artifact 上传；`powerd-v*` tag 会额外创建带附件的 GitHub Release 草稿。Windows 构建跑在 Windows runner 上，本地无需 Windows 机器。
+- tag 版本必须与 `src-tauri/tauri.conf.json` 的 `version` 一致；两者要一起升级。
+
+CI 产物未签名：macOS 构建分发前需要 `xattr -cr` 或 Developer ID，Windows 安装包分发前需要代码签名证书。
 
 ## 端口
 
@@ -82,6 +92,6 @@ apps/desktop/
 
 ## 已知限制
 
-- 目前仅 macOS；Rust 启动器保留 Windows 分支（cmd /C + PATH 增强），但未跑过 Windows 构建。
+- macOS 是主要目标；Windows 由 CI 构建（见 CI 构建一节），Rust 启动器保留 Windows 分支（cmd /C + PATH 增强、`taskkill` 进程树、隐藏控制台）。
 - 无系统托盘、无单实例锁：第二个实例会竞争同一端口（已运行的服务通过复用胜出）。
 - 应用内升级按钮仅存在于发布构建；debug 构建运行本地源码树并拒绝升级。
