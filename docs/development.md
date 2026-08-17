@@ -120,6 +120,12 @@ Contributors can opt into the comprehensive local gate set with `pnpm run check:
 
 The keyless [CI workflow](../.github/workflows/ci.yml) groups independent gates into broad lanes and runs a smaller compatibility signal across supported Node versions. Artifact consumers wait for one build within their lane. The separate real-API workflow runs `pnpm run test:e2e` with its configured worker bound. See [scripts/run-gates.ts](../scripts/run-gates.ts) and the workflow files for the current gate and job inventory.
 
+### PowerD desktop app
+
+The desktop shell lives in `apps/desktop` and ships as PowerD: a Tauri 2 window running the dsh web server with its UI embedded. `pnpm desktop:dev` runs the repo's own source so edits apply on the next start; `pnpm desktop:build` produces the release bundles. The full build, configuration, and per-platform notes live in [apps/desktop/README.md](../apps/desktop/README.md).
+
+CI builds it on [.github/workflows/build-powerd-desktop.yml](../.github/workflows/build-powerd-desktop.yml): a push touching `apps/desktop` builds the macOS Apple Silicon/Intel (`.dmg`) and Windows x64 (NSIS `.exe`) matrix and uploads preview artifacts, and a `powerd-v*` tag drafts a GitHub Release with the installers attached. The tag version must match `apps/desktop/src-tauri/tauri.conf.json`'s `version`.
+
 ### Daily commands
 
 The root [contributor instructions](../AGENTS.md#commands) summarize common commands, while [`package.json`](../package.json) and [scripts/run-gates.ts](../scripts/run-gates.ts) own the current script and gate inventories. Select the smallest checks that cover the changed surface. Documentation changes use `pnpm run doc-sync`; package-public behavior changes also update the owning README or JSDoc, and built-artifact checks require `pnpm run build` first.

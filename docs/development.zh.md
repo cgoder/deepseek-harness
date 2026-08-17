@@ -120,6 +120,12 @@ vendor manifest 守卫检查 `vendor/*/src` 下的改动是否连同对应的 `v
 
 keyless [CI 工作流](../.github/workflows/ci.yml) 将独立门禁分组到若干宽粒度 lane，并在受支持的 Node 版本上运行一组较小的兼容性检查。产物消费方在各自 lane 内等待一次 build。单独的真实 API 工作流按其配置的 worker 上限运行 `pnpm run test:e2e`。当前门禁和 job 清单以 [scripts/run-gates.ts](../scripts/run-gates.ts) 和工作流文件为准。
 
+### PowerD 桌面应用
+
+桌面壳位于 `apps/desktop`，以 PowerD 名字发布：一个 Tauri 2 窗口运行 dsh web 服务并内嵌其 UI。`pnpm desktop:dev` 运行仓库自身源码，修改下次启动即生效；`pnpm desktop:build` 产出发布构建。完整构建、配置与分平台说明见 [apps/desktop/README.md](../apps/desktop/README.md)。
+
+CI 在 [.github/workflows/build-powerd-desktop.yml](../.github/workflows/build-powerd-desktop.yml) 中构建它：改动 `apps/desktop` 的推送会构建 macOS Apple Silicon/Intel（`.dmg`）与 Windows x64（NSIS `.exe`）矩阵并上传预览 artifact，`powerd-v*` tag 会创建带安装包附件的 GitHub Release 草稿。tag 版本必须与 `apps/desktop/src-tauri/tauri.conf.json` 的 `version` 一致。
+
 ### 日常命令
 
 根目录的[贡献者说明](../AGENTS.md#commands)概述常用命令，[`package.json`](../package.json) 与 [scripts/run-gates.ts](../scripts/run-gates.ts) 则负责当前脚本和门禁清单。请选择覆盖变更表面的最小检查集。文档变更使用 `pnpm run doc-sync`；包公开行为变更还需更新所属 README 或 JSDoc，而基于构建产物的检查需要先运行 `pnpm run build`。
