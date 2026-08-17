@@ -86,18 +86,23 @@ jobs:
       - name: List bundle outputs
         shell: bash
         run: |
+          echo '--- bundle dirs ---'
           find apps/desktop/src-tauri/target -type d -name bundle -print
-          find apps/desktop/src-tauri/target -name '*.dmg' -o -name '*.exe' | head -20
+          echo '--- dmg/exe anywhere under target ---'
+          find apps/desktop/src-tauri/target \( -name '*.dmg' -o -name '*.exe' \) -print
+
+      - name: Collect bundles
+        shell: bash
+        run: |
+          mkdir -p dist-bundles
+          find apps/desktop/src-tauri/target -type f \( -name '*.dmg' -o -name '*.exe' \) -exec cp {} dist-bundles/ \;
+          ls -la dist-bundles
 
       - name: Upload bundles
         uses: actions/upload-artifact@v7
         with:
           name: powerd-${{ matrix.name }}
-          # The triple-scoped path is the canonical tauri layout; the wider
-          # fallback covers host-target bundles that live under target/release.
-          path: |
-            apps/desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/**/*.{dmg,exe}
-            apps/desktop/src-tauri/target/**/bundle/**/*.{dmg,exe}
+          path: dist-bundles/*
           if-no-files-found: error
           retention-days: 14
 
