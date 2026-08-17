@@ -1,0 +1,114 @@
+# Build the PowerD desktop app (apps/desktop) on every relevant push and
+# publish installer bundles to a GitHub Release on powerd-v* tags.
+#
+# Events:
+#   - push to ANY branch touching apps/desktop (or this file): build the
+#     platform matrix and upload bundles as preview artifacts. The default
+#     branch only mirrors the upstream project; feature branches such as
+#     `powerh` build on their own push.
+#   - push of a powerd-v* tag (from any branch) or manual dispatch: same
+#     matrix plus a GitHub Release draft with the installers attached. The
+#     tag must be pushed from a commit whose tauri.conf.json version
+#     matches the tag.
+#   - workflow_dispatch: build the selected branch only, no Release.
+#
+# No signing: macOS builds are ad-hoc/unsigned (xattr -cr or Developer ID
+# before distribution) and Windows installers are unsigned (SmartScreen
+# warns; sign with a code-signing cert for distribution).
+
+name: Build PowerD desktop
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - apps/desktop/**
+      - .github/workflows/build-powerd-desktop.yml
+    tags:
+      - powerd-v*
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PRIMARY_NODE_VERSION: '24'
+  POWERD_PROJECT: apps/desktop
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+            rust-target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macos-x64
+            os: macos-latest
+            rust-target: x86_64-apple-darwin
+            bundles: dmg
+          - name: windows-x64
+            os: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './apps/desktop/src-tauri -> target'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (release)
+        working-directory: ${{ env.POWERD_PROJECT }}
+        run: pnpm exec tauri build --target ${{ matrix.rust-target }} --bundles ${{ matrix.bundles }}
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v7
+        with:
+          name: powerd-${{ matrix.name }}
+          path: apps/desktop/src-tauri/target/${{ matrix.rust-target }}/release/bundle/**/*.{dmg,exe}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/powerd-v')
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          path: bundles
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" bundles/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "PowerD $GITHUB_REF_NAME" \
+            --notes "Installers built by GitHub Actions. macOS builds are unsigned (see apps/desktop/README.md); remove the quarantine flag before first launch." \
+            --draft
