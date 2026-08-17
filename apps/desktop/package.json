@@ -2,7 +2,7 @@
   "name": "@deepseek-ai/powerd",
   "description": "Native desktop wrapper (Tauri 2) for the dsh web UI",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "dev": "vite",

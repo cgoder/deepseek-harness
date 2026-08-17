@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-17-powerd-system-dsh-precedence.md
-2026-08-17-powerd-system-dsh-precedence.md: 5fa32d1ea703222c16db1efd3726910e99b84523
-2026-08-17-powerd-system-dsh-precedence.zh.md: 5173b40145a857de6d9f042bfaa0d3b493252654
+2026-08-17-powerd-system-dsh-precedence.md: e1620d54bef6783db5d83942f7bc9bb90ada668f
+2026-08-17-powerd-system-dsh-precedence.zh.md: 7ced43203ec62d2881c99f50e42cc2f656d03798

@@ -13,7 +13,7 @@ PowerD（dsh web UI 的 Tauri 桌面壳）原本在首次启动时把 `@deepseek
 Release 构建按下述优先级解析 dsh 启动命令：
 
 1. `POWERD_DSH_BIN`（外加 `POWERD_DSH_ARGS`）——显式覆盖，任何构建生效。
-2. PATH 上的系统 dsh（例如 `npm install -g`）。检测先探当前 PATH，再探 `base_launcher` 所用的 fnm 解析环境（`fnm exec --using default`）——因为 Finder/Dock 启动携带的精简 PATH 看不到 npm 的全局 bin 目录。
+2. 系统级 dsh（例如 `npm install -g`）。检测依次探测：当前 PATH；`base_launcher` 所用的 fnm 解析环境（`fnm exec --using default`，Finder/Dock 启动携带精简 PATH）；fnm 不管理的常见 npm 全局 bin 目录（Homebrew 的 `/opt/homebrew/bin`、nodejs.org 安装器的 `/usr/local/bin`、nvm 的 `~/.nvm/versions/node/*/bin`）；最后经 `npm prefix -g` 解析用户自定义全局根（任意 prefix 配置）。Windows 依次探测 `where dsh`（PATH + 标准 Node 安装目录）、`%APPDATA%\npm`、`npm prefix -g`。
 3. 固定安装目录（`POWERD_INSTALL_DIR` / `~/.powerd/dsh`）里先前拉取的副本，沿用旧复用行为。
 4. 都没有：像以前一样下载到固定安装目录，但新增 `dsh:installing` 事件，把加载遮罩换成醒目的"正在下载"横幅。
 
@@ -35,4 +35,4 @@ Release 构建按下述优先级解析 dsh 启动命令：
 
 ## 验证
 
-对 `tauri build` 打出的 release bundle 用 `open` 启动，以假 dsh 脚本代指各来源，跑通三个端到端场景：(1) 系统 dsh 存在——`dsh_info` 报告 `source=system`，spawn 的是假系统路径，`~/.powerd` 从未被创建；(2) 无系统 dsh、缓存存在（`POWERD_INSTALL_DIR`）——`source=cached`，复用缓存假包；(3) 两者皆无——`source=missing`，并在拆除前观察到真实的 `npm install --prefix … @deepseek-ai/dsh` 进程。`cargo check` 两种配置零警告通过，前端通过 `tsc --noEmit` + `vite build`。
+对 `tauri build` 打出的 release bundle 用 `open` 启动，以假 dsh 脚本代指各来源，跑通三个端到端场景：(1) 系统 dsh 存在——`dsh_info` 报告 `source=system`，spawn 的是假系统路径，`~/.powerd` 从未被创建；(2) 无系统 dsh、缓存存在（`POWERD_INSTALL_DIR`）——`source=cached`，复用缓存假包；(3) 两者皆无——`source=missing`，并在拆除前观察到真实的 `npm install --prefix … @deepseek-ai/dsh` 进程。v0.1.1 上线后收到现场报告（fnm 管理的 Node 中的全局 dsh 能被发现，但非 fnm 的 Node、且 dsh 在 `/opt/homebrew/bin` 时仍会触发下载），据此按上文扩展探测清单；此后真实 `npm install -g @deepseek-ai/dsh` 安装被解析为 `source=system` 且零下载，`/opt/homebrew/bin` 探针用假 dsh 实测命中。`cargo check` 两种配置零警告通过，前端通过 `tsc --noEmit` + `vite build`。

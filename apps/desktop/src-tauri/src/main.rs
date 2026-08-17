@@ -3,10 +3,7 @@
 use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
 use std::path::Path;
-#[cfg(not(debug_assertions))]
 use std::path::PathBuf;
-#[cfg(debug_assertions)]
-use std::path::PathBuf as DebugPathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -24,13 +21,11 @@ const DEFAULT_PORT: u16 = 3080;
 /// reporting problems.
 fn log_line(line: &str) {
     use std::io::Write;
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_else(|_| ".".to_string());
+    let Some(home) = home_dir() else { return };
     #[cfg(windows)]
-    let dir = std::path::PathBuf::from(&home).join(".powerd");
+    let dir = home.join(".powerd");
     #[cfg(not(windows))]
-    let dir = std::path::PathBuf::from(&home).join("Library").join("Logs").join("PowerD");
+    let dir = home.join("Library").join("Logs").join("PowerD");
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -235,10 +230,8 @@ fn install_dir() -> PathBuf {
     }
     // Windows exposes the home directory as USERPROFILE; HOME is unset
     // there, and a relative fallback would install into the GUI cwd.
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".powerd").join("dsh")
+    let home = home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.join(".powerd").join("dsh")
 }
 
 /// Absolute path of the installed dsh bin, when present. On Windows npm
@@ -256,8 +249,10 @@ fn installed_dsh_bin() -> Option<PathBuf> {
 
 /// Resolve a system-wide dsh executable (e.g. `npm install -g`) so a
 /// globally installed dsh stays the single source of truth. The GUI-launched
-/// process may carry a minimal PATH, so the search also probes the same
-/// fnm-resolved environment `base_launcher` would use.
+/// process may carry a minimal PATH, so the search probes, in order: the
+/// current PATH, the fnm-resolved environment `base_launcher` would use,
+/// the well-known npm global bin directories for other Node installs
+/// (Homebrew / nodejs.org / nvm), and the resolved `npm prefix -g`.
 #[cfg(not(debug_assertions))]
 fn system_dsh_bin() -> Option<PathBuf> {
     #[cfg(unix)]
@@ -274,9 +269,13 @@ fn system_dsh_bin() -> Option<PathBuf> {
             }
             Path::new(line).is_file().then(|| PathBuf::from(line))
         };
+        // 1. Current PATH (terminal-launched processes carry it).
         if let Some(p) = probe(&["sh", "-c", "command -v dsh || true"]) {
             return Some(p);
         }
+        // 2. The fnm-managed default Node environment (Finder/Dock launches
+        //    carry a minimal PATH, and npm -g installs land in the fnm node
+        //    bin dir when fnm owns Node).
         for fnm in FNM_CANDIDATES {
             if Path::new(fnm).is_file() {
                 if let Some(p) =
@@ -286,21 +285,106 @@ fn system_dsh_bin() -> Option<PathBuf> {
                 }
             }
         }
+        // 3. Well-known npm global bin dirs for Node installs fnm does not
+        //    manage (Homebrew node / nodejs.org installer).
+        for p in [
+            "/opt/homebrew/bin/dsh",
+            "/usr/local/bin/dsh",
+        ] {
+            if Path::new(p).is_file() {
+                return Some(PathBuf::from(p));
+            }
+        }
+        // 4. nvm-managed Node installs (`~/.nvm/versions/node/<v>/bin`).
+        if let Some(nvm_bin) = home_dir().map(|h| h.join(".nvm").join("versions").join("node")) {
+            if let Ok(entries) = std::fs::read_dir(&nvm_bin) {
+                if let Some(p) = entries
+                    .flatten()
+                    .map(|e| e.path().join("bin").join("dsh"))
+                    .find(|p| p.is_file())
+                {
+                    return Some(p);
+                }
+            }
+        }
+        // 5. The user's configured npm global root (`npm prefix -g`), which
+        //    covers custom prefixes outside every well-known location.
+        if let Some(prefix) = npm_global_prefix() {
+            let p = prefix.join("bin").join("dsh");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
         None
     }
     #[cfg(windows)]
     {
+        // 1. `where dsh` over PATH plus the standard Node install dirs.
         let mut cmd = Command::new("cmd");
         cmd.args(["/C", "where dsh"]);
         augment_path_with_node(&mut cmd);
         hide_console(&mut cmd);
         let out = cmd.output().ok()?;
+        if out.status.success() {
+            let line = String::from_utf8_lossy(&out.stdout);
+            if let Some(p) = line.lines().next().filter(|l| !l.is_empty()) {
+                return Some(PathBuf::from(p));
+            }
+        }
+        // 2. npm's default global bin dir for Windows (`%APPDATA%\npm`).
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let p = PathBuf::from(appdata).join("npm").join("dsh.cmd");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+        // 3. `npm prefix -g` (custom prefixes).
+        if let Some(prefix) = npm_global_prefix() {
+            let p = prefix.join("dsh.cmd");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+        None
+    }
+}
+
+/// Resolve the user's npm global install root via `npm prefix -g`, probing
+/// the fnm-resolved environment first (GUI launches lack npm on PATH).
+#[cfg(not(debug_assertions))]
+fn npm_global_prefix() -> Option<PathBuf> {
+    let run = |cmd: &mut Command| -> Option<PathBuf> {
+        let out = cmd.output().ok()?;
         if !out.status.success() {
             return None;
         }
-        let line = String::from_utf8_lossy(&out.stdout);
-        line.lines().next().filter(|l| !l.is_empty()).map(PathBuf::from)
+        let s = String::from_utf8_lossy(&out.stdout);
+        let s = s.trim();
+        if s.is_empty() {
+            return None;
+        }
+        Some(PathBuf::from(s))
+    };
+    for fnm in FNM_CANDIDATES {
+        if Path::new(fnm).is_file() {
+            let mut c = Command::new(fnm);
+            c.args(["exec", "--using", "default", "--", "npm", "prefix", "-g"]);
+            if let Some(p) = run(&mut c) {
+                return Some(p);
+            }
+        }
     }
+    let mut c = Command::new("npm");
+    c.args(["prefix", "-g"]);
+    run(&mut c)
+}
+
+/// The OS home directory, honoring Windows' USERPROFILE.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()
+        .map(PathBuf::from)
 }
 
 /// The dsh invocation resolved without triggering a first-use install:
@@ -442,8 +526,8 @@ fn ensure_dsh_installed(app: &AppHandle) -> Result<PathBuf, String> {
 /// (`.../apps/desktop/src-tauri` up three levels). Debug builds launch dsh
 /// straight from this source tree, so the repo must be `pnpm install`-ed.
 #[cfg(debug_assertions)]
-fn repo_root() -> DebugPathBuf {
-    DebugPathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("..")

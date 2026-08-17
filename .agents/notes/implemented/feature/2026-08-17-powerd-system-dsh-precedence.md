@@ -22,10 +22,16 @@ wasteful and confusing.
 Release builds resolve the dsh launch command in this priority order:
 
 1. `POWERD_DSH_BIN` (+ `POWERD_DSH_ARGS`) — explicit override, any build.
-2. A system-wide dsh on PATH (e.g. `npm install -g`). Detection probes the
-   current PATH first, then the same fnm-resolved environment
-   (`fnm exec --using default`) `base_launcher` uses, because Finder/Dock
-   launches carry a minimal PATH that hides npm's global bin directory.
+2. A system-wide dsh (e.g. `npm install -g`). Detection probes, in order:
+   the current PATH, then the same fnm-resolved environment
+   (`fnm exec --using default`) `base_launcher` uses (Finder/Dock launches
+   carry a minimal PATH), then the well-known npm global bin directories
+   for Node installs fnm does not manage (`/opt/homebrew/bin` for
+   Homebrew, `/usr/local/bin` for the nodejs.org installer, `~/.nvm/
+   versions/node/*/bin` for nvm), and finally the user's configured npm
+   global root resolved via `npm prefix -g` (custom prefixes).
+   Windows probes `where dsh` over PATH plus the standard Node install
+   dirs, `%APPDATA%\npm`, and `npm prefix -g`.
 3. The fixed install dir (`POWERD_INSTALL_DIR` / `~/.powerd/dsh`) from a
    previous fetch, reused as before.
 4. Nothing usable: download into the fixed install dir, exactly as before,
@@ -75,10 +81,16 @@ log and `~/.dsh` home remain shared across every source by design.
 
 Three end-to-end scenarios were exercised against a release bundle
 (`tauri build`) launched via `open`, with a fake dsh script standing in for
-each source: (1) system dsh present — `dsh_info` reported `source=system`,
-the spawned process was the fake system path, and `~/.powerd` was never
-created; (2) system dsh absent, cached present (`POWERD_INSTALL_DIR`) —
-`source=cached`, cached fake reused; (3) neither present — `source=missing`
-and a real `npm install --prefix … @deepseek-ai/dsh` process observed
-before teardown. Both `cargo check` profiles compile clean and the
-frontend passes `tsc --noEmit` + `vite build`.
+ each source: (1) system dsh present — `dsh_info` reported `source=system`,
+ the spawned process was the fake system path, and `~/.powerd` was never
+ created; (2) system dsh absent, cached present (`POWERD_INSTALL_DIR`) —
+ `source=cached`, cached fake reused; (3) neither present — `source=missing`
+ and a real `npm install --prefix … @deepseek-ai/dsh` process observed
+ before teardown. After the v0.1.1 field report (a global dsh inside an
+ fnm-managed Node was found, but a dsh in `/opt/homebrew/bin` under a
+ non-fnm Node would still trigger a download), the probe list was extended
+ as described above; a real `npm install -g @deepseek-ai/dsh` install is
+ now resolved as `source=system` with zero download, and the
+`/opt/homebrew/bin` probe was verified against a fake dsh there. Both
+`cargo check` profiles compile clean and the frontend passes
+`tsc --noEmit` + `vite build`.
