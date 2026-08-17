@@ -35,6 +35,7 @@ import type {
   ApiProxy, ClientRequest, ClientResponse, HistoryEntry, HostFrame, MuxFrame, RpcReceipt,
   ModelProviderGroup, ModelSelection, RpcRequest, RpcResponse, RpcResult, ServerRequest, ServerResponse, SessionSummary,
   ToolCallView, ToolEventView, ToolResultView, WorkspaceId, WorkspaceView,
+  UsageHeatmapDay, UsageTrendDay,
 } from './api.ts'
 import type { RequestPayload, ResponseValue, RpcMethodMap } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { AbstractApiClient, RpcId, SESSION_SEARCH_RESULT_LIMIT } from './api.ts'
@@ -2962,6 +2963,33 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         models: fixtureModelGroups().flatMap(group => group.models.map(model => ({ id: model.id, name: model.name }))),
       }),
     },
+    usage: {
+      stats: (request) => {
+        const days = Math.min(Math.max(request.payload.days ?? 30, 1), 366)
+        const today = new Date()
+        const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (days - 1))
+        const trend: UsageTrendDay[] = []
+        const heatmap: UsageHeatmapDay[] = []
+        for (const cursor = new Date(start); cursor <= today; cursor.setDate(cursor.getDate() + 1)) {
+          const date = cursor.toISOString().slice(0, 10)
+          trend.push({ date, tokens: 0, models: {} })
+        }
+        const heatStart = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (26 * 7 - 1))
+        for (const cursor = new Date(heatStart); cursor <= today; cursor.setDate(cursor.getDate() + 1)) {
+          heatmap.push({ date: cursor.toISOString().slice(0, 10), messages: 0 })
+        }
+        return ok(request, {
+          generatedAt: Date.now(),
+          range: { days, startDate: start.toISOString().slice(0, 10) },
+          totals: { tokens: 0, sessions: 0, messages: 0, activeDays: 0 },
+          streak: 0,
+          topModel: null,
+          models: [],
+          trend,
+          heatmap,
+        })
+      },
+    },
     respond(message: ClientResponse): Promise<RpcReceipt> {
       // Same routing discipline as the host: rpcId first, then the payload's
       // audit correlation; a settled or unknown id is not-pending.
@@ -3129,6 +3157,7 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'llm.providers': return this.api.llm.providers(request)
       case 'llm.models': return this.api.llm.models(request)
       case 'llm.discoverModels': return this.api.llm.discoverModels(request, signal)
+      case 'usage.stats': return this.api.usage.stats(request, signal)
     }
   }
 

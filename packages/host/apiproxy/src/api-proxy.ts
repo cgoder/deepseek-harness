@@ -94,6 +94,8 @@ import { imageLimitsProjectionSchema, sessionListMetadataProjectionSchema } from
 import { questionResponsePayloadSchema } from './api/questions.schema.ts'
 import type { ClientResponse, RpcError, RpcReceipt, RpcRequest, RpcResponse } from './api/rpc.ts'
 import { RpcId } from './api/rpc.ts'
+import { computeUsageStats, type UsageSessionSource } from './usage-stats.ts'
+import type { UsageStats } from './api/usage.ts'
 import type {
   AskUserQuestionAnswer, AskUserQuestionItem, AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
@@ -2023,6 +2025,34 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return ok(request, namespaceView(descriptor))
   }
 
+  /** Aggregate token/message statistics for the Web usage page. */
+  async function usageStats(
+    request: RpcRequest<{ days?: number }>,
+    signal?: AbortSignal,
+  ): Promise<RpcResponse<UsageStats>> {
+    const days = Math.min(Math.max(request.payload.days ?? 30, 1), 366)
+    signal?.throwIfAborted()
+    const sources: UsageSessionSource[] = ctx.sessions.list().map(session => ({
+      id: session.id,
+      events: session.events,
+    }))
+    const persistence = ctx.get('sessionPersistence')
+    if (persistence !== undefined) {
+      const attached = new Set(ctx.sessions.list().map(session => session.id))
+      const cold = (await persistence.list(signal)).filter(meta => !attached.has(meta.id))
+      for (const meta of cold) {
+        signal?.throwIfAborted()
+        try {
+          const inspected = await persistence.inspect(meta.id, signal)
+          sources.push({ id: inspected.meta.id, events: inspected.events })
+        } catch (error) {
+          ctx.logger.warn(`usage.stats: failed to inspect session "${meta.id}" (skipping it): ${String(error)}`)
+        }
+      }
+    }
+    return ok(request, computeUsageStats(sources, days))
+  }
+
   return {
     sessions: {
       // Attached sessions summarize from memory; persisted-but-unattached (cold)
@@ -3636,6 +3666,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
     },
 
+    usage: {
+      async stats(request, signal) {
+        return usageStats(request, signal)
+      },
+    },
     downloads: {
       async sessionLog(request, signal) {
         // Clean error path first: missing services answer 500 and a missing

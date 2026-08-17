@@ -7,13 +7,37 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { ApiProxy, GoalRef, HostFrame, MuxFrame, RpcMessage, RpcRequest, RpcResponse } from '@deepseek-ai/dsh-host-apiproxy'
+import type { ApiProxy, GoalRef, HostFrame, MuxFrame, RpcMessage, RpcRequest, RpcResponse, UsageStats } from '@deepseek-ai/dsh-host-apiproxy'
 import { InProcessApiClient, RpcId, toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 
 const sid = (id: string): SessionId => id as SessionId
 
 function ok<T>(request: RpcRequest<unknown>, value: T): Promise<RpcResponse<T>> {
   return Promise.resolve({ rpcId: request.rpcId, result: { ok: true, value } })
+}
+
+function emptyUsageStats(days = 30): UsageStats {
+  const today = new Date()
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (days - 1))
+  const trend: UsageStats['trend'] = []
+  const heatmap: UsageStats['heatmap'] = []
+  for (const cursor = new Date(start); cursor <= today; cursor.setDate(cursor.getDate() + 1)) {
+    trend.push({ date: cursor.toISOString().slice(0, 10), tokens: 0, models: {} })
+  }
+  const heatStart = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (26 * 7 - 1))
+  for (const cursor = new Date(heatStart); cursor <= today; cursor.setDate(cursor.getDate() + 1)) {
+    heatmap.push({ date: cursor.toISOString().slice(0, 10), messages: 0 })
+  }
+  return {
+    generatedAt: Date.now(),
+    range: { days, startDate: start.toISOString().slice(0, 10) },
+    totals: { tokens: 0, sessions: 0, messages: 0, activeDays: 0 },
+    streak: 0,
+    topModel: null,
+    models: [],
+    trend,
+    heatmap,
+  }
 }
 
 /** Scripted impl: every method resolves an empty-ish OK unless a case overrides it. */
@@ -129,6 +153,9 @@ function scriptedApi(overrides: {
       ...overrides.llm,
     },
     events: { mux: () => empty<MuxFrame>(), host: () => empty<HostFrame>(), ...overrides.events },
+    usage: {
+      stats: request => ok(request, emptyUsageStats(request.payload.days ?? 30)),
+    },
     respond: overrides.respond ?? (() => Promise.resolve({ accepted: false as const, reason: 'not-pending' as const })),
     downloads: { sessionLog: async () => new Response('stub', { status: 404 }) },
   }
