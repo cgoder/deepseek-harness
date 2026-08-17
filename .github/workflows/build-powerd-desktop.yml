@@ -2,12 +2,15 @@
 # publish installer bundles to a GitHub Release on powerd-v* tags.
 #
 # Events:
-#   - push to master touching apps/desktop (or this file): build the
-#     platform matrix and upload bundles as preview artifacts.
-#   - push of a powerd-v* tag (or manual dispatch): same matrix plus a
-#     GitHub Release with the installers attached. The tag must be pushed
-#     from a commit whose tauri.conf.json version matches the tag.
-#   - workflow_dispatch: build only, no Release.
+#   - push to ANY branch touching apps/desktop (or this file): build the
+#     platform matrix and upload bundles as preview artifacts. The default
+#     branch only mirrors the upstream project; feature branches such as
+#     `powerh` build on their own push.
+#   - push of a powerd-v* tag (from any branch) or manual dispatch: same
+#     matrix plus a GitHub Release draft with the installers attached. The
+#     tag must be pushed from a commit whose tauri.conf.json version
+#     matches the tag.
+#   - workflow_dispatch: build the selected branch only, no Release.
 #
 # No signing: macOS builds are ad-hoc/unsigned (xattr -cr or Developer ID
 # before distribution) and Windows installers are unsigned (SmartScreen
@@ -18,7 +21,6 @@ name: Build PowerD desktop
 on:
   workflow_dispatch:
   push:
-    branches: [master]
     paths:
       - apps/desktop/**
       - .github/workflows/build-powerd-desktop.yml
