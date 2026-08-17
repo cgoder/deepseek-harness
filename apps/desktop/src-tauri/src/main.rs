@@ -17,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use std::os::unix::process::CommandExt;
 
 /// Default port for the dsh web server (overridable via `--port` arg or
-/// `DSH_DESKTOP_PORT` env var).
+/// `POWERD_PORT` env var).
 const DEFAULT_PORT: u16 = 3080;
 const PACKAGE: &str = "@deepseek-ai/dsh";
 /// npm-install timeout for the first install and for upgrades. Downloads can
@@ -27,7 +27,7 @@ const PACKAGE: &str = "@deepseek-ai/dsh";
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Resolve the server port once: `--port N` / `--port=N` argv (from
-/// `open "DSH Desktop.app" --args --port N`) > `DSH_DESKTOP_PORT` env >
+/// `open "PowerD.app" --args --port N`) > `POWERD_PORT` env >
 /// default 3080.
 fn resolve_port() -> u16 {
     static PORT: OnceLock<u16> = OnceLock::new();
@@ -46,7 +46,7 @@ fn resolve_port() -> u16 {
                 }
             }
         }
-        if let Ok(v) = std::env::var("DSH_DESKTOP_PORT") {
+        if let Ok(v) = std::env::var("POWERD_PORT") {
             if let Ok(p) = v.parse() {
                 return p;
             }
@@ -163,11 +163,11 @@ fn augment_path_with_node(c: &mut Command) {
 /// keeps the "always fetch the latest npm release" behavior.
 #[cfg(not(debug_assertions))]
 fn install_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("DSH_DESKTOP_INSTALL_DIR") {
+    if let Ok(dir) = std::env::var("POWERD_INSTALL_DIR") {
         return PathBuf::from(dir);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".dsh-desktop").join("dsh")
+    PathBuf::from(home).join(".powerd").join("dsh")
 }
 
 /// Absolute path of the installed dsh bin, when present.
@@ -273,8 +273,8 @@ fn local_source_command() -> Option<Command> {
 }
 
 /// The dsh launch command, resolved in priority order:
-/// 1. `DSH_DESKTOP_DSH_BIN` (+ optional whitespace-separated
-///    `DSH_DESKTOP_DSH_ARGS`) — explicit override in any build.
+/// 1. `POWERD_DSH_BIN` (+ optional whitespace-separated
+///    `POWERD_DSH_ARGS`) — explicit override in any build.
 /// 2. Debug builds: the local source tree (`node --import tsx/esm
 ///    apps/cli/src/bin.ts`) when present, so repo edits show up instantly.
 /// 3. Release builds: the dsh npm package installed into `install_dir()`,
@@ -282,9 +282,9 @@ fn local_source_command() -> Option<Command> {
 /// `web --port <resolved>` is always appended by the caller.
 #[cfg_attr(debug_assertions, allow(unused_variables))]
 fn dsh_base_command(app: &AppHandle) -> Result<Command, String> {
-    if let Ok(bin) = std::env::var("DSH_DESKTOP_DSH_BIN") {
+    if let Ok(bin) = std::env::var("POWERD_DSH_BIN") {
         let mut c = Command::new(&bin);
-        if let Ok(args) = std::env::var("DSH_DESKTOP_DSH_ARGS") {
+        if let Ok(args) = std::env::var("POWERD_DSH_ARGS") {
             c.args(args.split_whitespace());
         }
         return Ok(c);
@@ -418,7 +418,7 @@ fn start_internal(app: &AppHandle) -> Result<Status, String> {
 
     let mut cmd = dsh_command(app)?;
     #[cfg(debug_assertions)]
-    eprintln!("[dsh-desktop] spawning: {cmd:?}");
+    eprintln!("[powerd] spawning: {cmd:?}");
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {
@@ -427,7 +427,7 @@ fn start_internal(app: &AppHandle) -> Result<Status, String> {
 
     let mut child = cmd.spawn().map_err(|e| {
         #[cfg(debug_assertions)]
-        eprintln!("[dsh-desktop] spawn error: {e}");
+        eprintln!("[powerd] spawn error: {e}");
         format!("无法启动 dsh web：{e}")
     })?;
     let pid = child.id();

@@ -17,7 +17,7 @@ interface UpgradeReply {
   message: string
 }
 
-let PORT = 3080 // default; refined from Rust (--port arg / DSH_DESKTOP_PORT env)
+let PORT = 3080 // default; refined from Rust (--port arg / POWERD_PORT env)
 let APP_URL = `http://127.0.0.1:${PORT}`
 
 // eslint-disable-next-line typescript/no-unnecessary-type-parameters -- the element type lives at the call site

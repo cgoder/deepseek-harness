@@ -1,5 +1,5 @@
 [package]
-name = "dsh-desktop"
+name = "powerd"
 version = "0.1.0"
 description = "Native desktop wrapper for the dsh web UI"
 authors = ["deepseek-harness contributors"]

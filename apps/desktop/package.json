@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-desktop",
+  "name": "@deepseek-ai/powerd",
   "description": "Native desktop wrapper (Tauri 2) for the dsh web UI",
   "private": true,
   "version": "0.1.0",
