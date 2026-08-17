@@ -166,7 +166,11 @@ fn install_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("POWERD_INSTALL_DIR") {
         return PathBuf::from(dir);
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    // Windows exposes the home directory as USERPROFILE; HOME is unset
+    // there, and a relative fallback would install into the GUI cwd.
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".powerd").join("dsh")
 }
 
