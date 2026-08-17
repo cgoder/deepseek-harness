@@ -47,6 +47,17 @@ with the npm global-install command to run instead, so the button state is
 never the only guard. `~/.powerd/dsh` leftovers are left untouched after a
 switch to a system dsh — no automatic deletion of user data.
 
+A system dsh is spawned **without** the `base_launcher` fnm wrapper: npm
+global installs place the dsh bin next to the Node that owns it (`npm
+prefix` equals the Node install root), so the launcher prepends the bin
+directory to PATH and runs the bin directly, making the
+`#!/usr/bin/env node` shebang resolve to the matching Node. Wrapping a
+nvm/Homebrew-installed dsh in `fnm exec` would run it under whatever Node
+fnm manages — a different major version or a different manager's install.
+The cached install keeps the `base_launcher` wrapper, because
+`~/.powerd/dsh` contains no Node of its own.
+switch to a system dsh — no automatic deletion of user data.
+
 The resolution chain (including `dsh_info`/`dsh_version`, which never
 download) shares one `resolved_dsh_command()` helper; only `start_internal`
 falls through to the downloading `ensure_dsh_installed`. A PowerD log file

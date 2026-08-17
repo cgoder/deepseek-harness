@@ -387,6 +387,28 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Launch a system-wide dsh with its own Node environment. npm global
+/// installs place the dsh bin next to the Node that owns it (`npm prefix`
+/// equals the Node install root), so prepending the bin directory to PATH
+/// makes the `#!/usr/bin/env node` shebang resolve to the matching Node —
+/// nvm, Homebrew, nodejs.org and fnm installs each keep their own bin dir.
+/// `base_launcher` is deliberately NOT used here: its fnm wrapper would run
+/// the dsh under whatever Node fnm manages, which can be a different major
+/// version or a different manager's install.
+#[cfg(all(unix, not(debug_assertions)))]
+fn system_dsh_command(bin: &Path) -> Command {
+    let mut c = Command::new(bin);
+    if let Some(dir) = bin.parent() {
+        let dir = dir.to_string_lossy().to_string();
+        let path = match std::env::var("PATH") {
+            Ok(p) if !p.is_empty() => format!("{dir}:{p}"),
+            _ => dir,
+        };
+        c.env("PATH", path);
+    }
+    c
+}
+
 /// The dsh invocation resolved without triggering a first-use install:
 /// `POWERD_DSH_BIN` override, then a system-wide dsh, then the fixed
 /// install dir. None means nothing usable exists yet and the caller decides
@@ -406,7 +428,16 @@ fn resolved_dsh_command() -> Option<Command> {
     #[cfg(not(debug_assertions))]
     {
         if let Some(bin) = system_dsh_bin() {
-            return Some(base_launcher(bin.to_str()?));
+            #[cfg(unix)]
+            {
+                return Some(system_dsh_command(&bin));
+            }
+            #[cfg(windows)]
+            {
+                // dsh.cmd shims call `node` by name; base_launcher's cmd /C
+                // wrapper already augments PATH with the standard Node dirs.
+                return Some(base_launcher(bin.to_str()?));
+            }
         }
         if let Some(bin) = installed_dsh_bin() {
             return Some(base_launcher(bin.to_str()?));
