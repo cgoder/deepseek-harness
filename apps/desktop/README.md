@@ -23,6 +23,14 @@ The dedicated npm install replaces `npx`: npm's exec runner has a known bug (npm
 - Rust toolchain (Homebrew `rust` works) and Xcode Command Line Tools for the native build.
 - A `pnpm install` at the repository root (dependency resolution and, for debug builds, the `tsx` loader).
 
+## End-user requirements
+
+A machine running the packaged app needs Node.js ≥ 22.19 with npm. The first launch installs the `@deepseek-ai/dsh` package into `~/.powerd/dsh` (`%USERPROFILE%\.powerd\dsh` on Windows) via npm; dsh itself is never installed separately. Without Node.js the first-launch install fails with the npm error shown in the CLI log tab.
+
+- macOS: the app prefers a detected fnm default version, then falls back to `node`/`npm` on PATH.
+- Windows: the app merges the standard install dirs (`Program Files\nodejs`, `%LOCALAPPDATA%\Programs\nodejs`) into the child PATH; a custom Node install (e.g. nvm-windows) must be on PATH itself.
+- Offline machines: install Node.js from nodejs.org and keep the first launch online; the npm cache is reused afterwards.
+
 ## Build
 
 ```sh

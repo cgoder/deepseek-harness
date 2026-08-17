@@ -23,6 +23,14 @@ dsh 启动命令按以下顺序解析：
 - Rust 工具链（Homebrew `rust` 可用）与 Xcode Command Line Tools，用于原生构建。
 - 仓库根执行过 `pnpm install`（依赖解析；debug 构建还需要 `tsx` loader）。
 
+## 最终用户机器要求
+
+运行打包后应用的机器需要 Node.js ≥ 22.19 与 npm。首次启动会通过 npm 将 `@deepseek-ai/dsh` 包安装到 `~/.powerd/dsh`（Windows 为 `%USERPROFILE%\.powerd\dsh`）；dsh 本身从不单独安装。没有 Node.js 时首次安装会失败，具体 npm 报错显示在 CLI 日志页签。
+
+- macOS：应用优先使用检测到的 fnm 默认版本，否则回退到 PATH 上的 `node`/`npm`。
+- Windows：应用会把标准安装目录（`Program Files\nodejs`、`%LOCALAPPDATA%\Programs\nodejs`）合并进子进程 PATH；自定义 Node 安装（如 nvm-windows）需自行在 PATH 中。
+- 离线机器：从 nodejs.org 安装 Node.js，并保持首次启动联网；之后 npm 缓存会被复用。
+
 ## 构建
 
 ```sh
