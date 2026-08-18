@@ -688,15 +688,23 @@ fn dsh_source() -> DshSource {
 /// line with `--json`) to emit `dsh:installed` (exit 0, with the installed
 /// version) or `dsh:install-failed` (exit ≠ 0 or timeout, with the npm
 /// error code and summary). Blocks until the child exits.
+/// `node` is the node the version precheck chose: npm runs under it so a
+/// stale system npm (e.g. node 14 / npm 6 from nodejs.org) can never
+/// execute the install — its node cannot build koffi.
 #[cfg(not(debug_assertions))]
-fn run_npm(app: &AppHandle, args: &[String], timeout: Duration) -> Result<(), String> {
-    // Resolve npm across every Node installation instead of relying on PATH
-    // or fnm: a Finder/Dock-launched process carries a minimal PATH, so a
-    // machine without fnm would fail with ENOENT here.
-    let npm = find_bin("npm").ok_or_else(|| {
-        "NPM_NOT_FOUND: 未找到 npm：请先安装 Node.js ≥ 22.19（nodejs.org，或 fnm / nvm / Homebrew）".to_string()
-    })?;
-    let mut cmd = launcher(&npm.to_string_lossy(), npm.parent());
+fn run_npm(app: &AppHandle, node: &Path, args: &[String], timeout: Duration) -> Result<(), String> {
+    // Prefer the npm that ships next to the precheck-chosen node; fall
+    // back to the probe chain (npm_global_prefix etc.) when that node has
+    // no npm of its own.
+    let node_dir = node.parent();
+    let npm = node_dir
+        .map(|d| d.join(if cfg!(windows) { "npm.cmd" } else { "npm" }))
+        .filter(|p| p.is_file())
+        .or_else(|| find_bin("npm"))
+        .ok_or_else(|| {
+            "NPM_NOT_FOUND: 未找到 npm：请先安装 Node.js ≥ 22.19（nodejs.org，或 fnm / nvm / Homebrew）".to_string()
+        })?;
+    let mut cmd = launcher(&npm.to_string_lossy(), node.parent());
     cmd.args(args);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
@@ -827,7 +835,7 @@ fn extract_install_error(json: &str) -> (String, String) {
 /// First use downloads it (several minutes on slow networks); subsequent
 /// starts reuse it.
 #[cfg(not(debug_assertions))]
-fn ensure_dsh_installed(app: &AppHandle) -> Result<PathBuf, String> {
+fn ensure_dsh_installed(app: &AppHandle, node: &Path) -> Result<PathBuf, String> {
     if let Some(bin) = installed_dsh_bin() {
         return Ok(bin);
     }
@@ -838,7 +846,7 @@ fn ensure_dsh_installed(app: &AppHandle) -> Result<PathBuf, String> {
     let mut args = vec!["install".to_string(), "--prefix".to_string(), prefix.to_string()];
     args.extend(NPM_COMMON.iter().map(|f| f.to_string()));
     args.push(PACKAGE.to_string());
-    run_npm(app, &args, INSTALL_TIMEOUT)?;
+    run_npm(app, node, &args, INSTALL_TIMEOUT)?;
     installed_dsh_bin().ok_or_else(|| format!("dsh 已安装但未找到 bin：{}", dir.display()))
 }
 
@@ -914,7 +922,7 @@ fn dsh_base_command(app: &AppHandle, node: &Path) -> Result<Command, String> {
     #[cfg(not(debug_assertions))]
     {
         log_line("dsh source: missing -> downloading");
-        let bin = ensure_dsh_installed(app)?;
+        let bin = ensure_dsh_installed(app, node)?;
         let bin = bin.to_str().ok_or_else(|| "dsh bin 路径无效".to_string())?.to_string();
         return Ok(launcher(&bin, node.parent()));
     }
@@ -1208,11 +1216,14 @@ async fn upgrade_dsh(app: AppHandle) -> Result<UpgradeResult, String> {
             });
         }
 
+        // Run the upgrade under the precheck-chosen node so npm matches
+        // the validated runtime (a stale system npm could fail on koffi).
+        let (_, node) = check_node_requirement()?;
         let _ = app.emit("server:stdout", format!("$ npm install --prefix {} {PACKAGE}@latest", install_dir().display()));
         let mut args = vec!["install".to_string(), "--prefix".to_string(), install_dir().to_str().unwrap_or_default().to_string()];
         args.extend(NPM_COMMON.iter().map(|f| f.to_string()));
         args.push(format!("{PACKAGE}@latest"));
-        match run_npm(&app, &args, INSTALL_TIMEOUT) {
+        match run_npm(&app, &node, &args, INSTALL_TIMEOUT) {
             Ok(()) => {}
             Err(e) => return Ok(UpgradeResult { ok: false, version: "unknown".to_string(), restarted: false, message: format!("升级失败：{e}") }),
         }
