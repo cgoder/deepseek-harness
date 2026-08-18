@@ -241,7 +241,10 @@ fn launcher(bin: &str, node_dir: Option<&Path>) -> Command {
 
 /// Launch a node-family CLI (`node`/`npm`/a dsh bin) with a system Node's
 /// bin dir prepended to PATH. Used for installs that ship no Node of their
-/// own (the fixed `~/.powerd/dsh` cache).
+/// own (the fixed `~/.powerd/dsh` cache). The launch path now passes the
+/// precheck-chosen node explicitly (see dsh_base_command); the only
+/// remaining callers are version probes with no precheck context.
+#[cfg_attr(debug_assertions, allow(dead_code))] // used by run_dsh_version in release
 fn base_launcher(bin: &str) -> Command {
     launcher(bin, find_bin("node").and_then(|n| n.parent().map(Path::to_path_buf)).as_deref())
 }
@@ -471,31 +474,108 @@ fn parse_node_version(v: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
+/// Every plausible node binary on this machine, in probe order: PATH,
+/// each fnm candidate's default env, Homebrew, nodejs.org, the newest
+/// nvm version, the newest legacy-fnm (~/.fnm) version. The version
+/// precheck walks this list and uses the first one that reports ≥ 22.5 —
+/// a stale fnm default must never beat a user's nvm v24 just because the
+/// fnm branch sorts first.
+#[cfg(unix)]
+fn node_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let probe = |args: &[&str]| -> Option<PathBuf> {
+        let ok = Command::new(args[0]).args(&args[1..]).output().ok()?;
+        if !ok.status.success() {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&ok.stdout);
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+        Path::new(line).is_file().then(|| PathBuf::from(line))
+    };
+    let which = "command -v node || true";
+    if let Some(p) = probe(&["sh", "-c", which]) {
+        out.push(p);
+    }
+    for fnm in FNM_CANDIDATES {
+        if Path::new(fnm).is_file() {
+            if let Some(p) = probe(&[fnm, "exec", "--using", "default", "--", "sh", "-c", which]) {
+                out.push(p);
+            }
+        }
+    }
+    for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
+        let p = Path::new(dir).join("node");
+        if p.is_file() {
+            out.push(p);
+        }
+    }
+    if let Some(nvm) = home_dir().map(|h| h.join(".nvm").join("versions").join("node")) {
+        if let Some(p) = newest_version_bin(&nvm, "", "node") {
+            out.push(p);
+        }
+    }
+    if let Some(fnm) = home_dir().map(|h| h.join(".fnm").join("node-versions")) {
+        if let Some(p) = newest_version_bin(&fnm, "installation", "node") {
+            out.push(p);
+        }
+    }
+    out
+}
+
+#[cfg(windows)]
+fn node_candidates() -> Vec<PathBuf> {
+    find_bin("node").into_iter().collect()
+}
+
 /// Verify the Node PowerD would run dsh with meets the dsh requirement,
 /// so an old Node fails with a clear message instead of the loader errors
 /// (`node:zlib` zstd / `Promise.withResolvers`) that surface as "plugin
-/// tree failed to load" from inside dsh.
-fn check_node_requirement() -> Result<String, String> {
-    let node = find_bin("node").ok_or_else(|| {
-        "NODE_NOT_FOUND: 未找到 Node.js：请先安装 Node.js ≥ 22.5（推荐 22.19+，nodejs.org，或 fnm / nvm / Homebrew）".to_string()
-    })?;
-    let out = launcher(&node.to_string_lossy(), node.parent())
-        .arg("--version")
-        .output()
-        .map_err(|e| format!("NODE_CHECK_FAILED: 无法运行 Node.js（{e}），请先安装 Node.js ≥ 22.5"))?;
-    if !out.status.success() {
-        return Err("NODE_CHECK_FAILED: 无法运行 Node.js（node --version 失败）".to_string());
+/// tree failed to load" from inside dsh. Walks every candidate node and
+/// returns (version, chosen node path) of the first one that reports
+/// ≥ 22.5.
+fn check_node_requirement() -> Result<(String, PathBuf), String> {
+    let mut best: Option<(u32, u32)> = None; // highest seen, for the error message
+    let mut best_version = String::new();
+    let mut tried = 0usize;
+    let mut seen = std::collections::HashSet::new();
+    for bin in node_candidates() {
+        if !seen.insert(bin.clone()) {
+            continue;
+        }
+        tried += 1;
+        let Ok(out) = Command::new(&bin).arg("--version").output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let Some(nums) = parse_node_version(&v) else {
+            continue;
+        };
+        if nums < MIN_NODE_VERSION {
+            if best.is_none_or(|b| nums > b) {
+                best = Some(nums);
+                best_version = v.clone();
+            }
+            continue;
+        }
+        log_line(&format!("node precheck: {v} at {}", bin.display()));
+        return Ok((v, bin));
     }
-    let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let nums = parse_node_version(&v)
-        .ok_or_else(|| format!("无法解析 Node.js 版本：{v:?}"))?;
-    if nums < MIN_NODE_VERSION {
-        return Err(format!(
-            "NODE_TOO_OLD: 检测到 Node.js {v}，dsh 需要 Node.js ≥ 22.5（依赖 node:zlib zstd 与 \
-             Promise.withResolvers）。请升级后重试：fnm install 22 / nvm install 22 / brew install node"
-        ));
+    if tried == 0 {
+        return Err(
+            "NODE_NOT_FOUND: 未找到 Node.js：请先安装 Node.js ≥ 22.5（推荐 22.19+，nodejs.org，或 fnm / nvm / Homebrew）".to_string(),
+        );
     }
-    Ok(v)
+    let v = if best_version.is_empty() { "未知版本".to_string() } else { best_version };
+    Err(format!(
+        "NODE_TOO_OLD: 检测到 Node.js {v}，dsh 需要 Node.js ≥ 22.5（依赖 node:zlib zstd 与 \
+         Promise.withResolvers）。请升级后重试：fnm install 22 / nvm install 22 / brew install node"
+    ))
 }
 
 /// Return the `name` bin under the numerically-newest version dir of a
@@ -779,7 +859,9 @@ fn local_source_command() -> Option<Command> {
     let root = repo_root();
     let bin = root.join("apps").join("cli").join("src").join("bin.ts");
     let bin = bin.to_str()?.to_string();
-    let mut c = base_launcher("node");
+    // Debug builds run on the developer's machine; the probe-chain node
+    // is fine here (the release precheck passes an explicit node instead).
+    let mut c = launcher("node", find_bin("node").and_then(|n| n.parent().map(Path::to_path_buf)).as_deref());
     c.args(["--import", "tsx/esm", &bin]);
     c.current_dir(&root);
     Some(c)
@@ -796,8 +878,10 @@ fn local_source_command() -> Option<Command> {
 /// 4. Release builds: the dsh npm package installed into `install_dir()`,
 ///    downloading it on first use when nothing else exists.
 /// `web --port <resolved>` is always appended by the caller.
+/// `node` is the node the version precheck chose; cached/local launches
+/// run under it so the precheck and the spawn agree.
 #[cfg_attr(debug_assertions, allow(unused_variables))]
-fn dsh_base_command(app: &AppHandle) -> Result<Command, String> {
+fn dsh_base_command(app: &AppHandle, node: &Path) -> Result<Command, String> {
     if let Some(c) = resolved_dsh_command() {
         log_line(&format!(
             "dsh source: {}",
@@ -828,23 +912,23 @@ fn dsh_base_command(app: &AppHandle) -> Result<Command, String> {
         log_line("dsh source: missing -> downloading");
         let bin = ensure_dsh_installed(app)?;
         let bin = bin.to_str().ok_or_else(|| "dsh bin 路径无效".to_string())?.to_string();
-        return Ok(base_launcher(&bin));
+        return Ok(launcher(&bin, node.parent()));
     }
     // Debug builds only: resolved_dsh_command covered the local source tree;
     // the npx fallback fires when that bin is absent (e.g. a release tree).
     #[cfg(debug_assertions)]
     {
-        let mut c = base_launcher("npx");
+        let mut c = launcher("npx", node.parent());
         c.args(["--yes", PACKAGE]);
         Ok(c)
     }
 }
 
-/// `dsh web --port <n>` — starts the dsh web server.
+/// `web --port <n>` — starts the dsh web server.
 /// dsh web only prints the URL, it never opens a browser tab, so no
 /// --no-open equivalent is needed.
-fn dsh_command(app: &AppHandle) -> Result<Command, String> {
-    let mut c = dsh_base_command(app)?;
+fn dsh_command(app: &AppHandle, node: &Path) -> Result<Command, String> {
+    let mut c = dsh_base_command(app, node)?;
     let port = resolve_port().to_string();
     c.args(["web", "--port", &port]);
     Ok(c)
@@ -942,13 +1026,11 @@ fn start_internal(app: &AppHandle) -> Result<Status, String> {
 
     // Fail fast with a clear message when the Node PowerD would use is too
     // old for dsh (node:zlib zstd needs ≥ 22.5), instead of surfacing the
-    // loader errors from inside dsh.
-    if let Err(e) = check_node_requirement() {
-        log_line(&format!("node requirement check failed: {e}"));
-        return Err(e);
-    }
+    // loader errors from inside dsh. The chosen node also drives the
+    // cached-install launch, so the precheck and the spawn agree.
+    let (_, node) = check_node_requirement()?;
 
-    let mut cmd = dsh_command(app)?;
+    let mut cmd = dsh_command(app, &node)?;
     #[cfg(debug_assertions)]
     eprintln!("[powerd] spawning: {cmd:?}");
     log_line(&format!("start_internal: spawning {:?}", cmd.get_program().to_string_lossy()));
