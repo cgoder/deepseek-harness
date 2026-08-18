@@ -310,7 +310,7 @@ main {
   margin-bottom: 2px;
 }
 .a-title { font-size: 19px; font-weight: 700; margin: 0; }
-.a-sub { font-size: 13px; color: var(--muted); margin: 0 0 26px; }
+.a-sub { font-size: 13px; color: var(--muted); margin: 0 0 36px; }
 .a-steps { display: flex; align-items: center; margin-bottom: 24px; }
 .a-step { display: flex; align-items: center; gap: 8px; flex: 1; }
 .a-step:last-child { flex: 0; }
