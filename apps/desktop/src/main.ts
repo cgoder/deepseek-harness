@@ -65,6 +65,7 @@ const statusText = q<HTMLSpanElement>('#status-text')
 const topbar = q<HTMLElement>('#topbar')
 const grabber = q<HTMLDivElement>('#grabber')
 const guide = q<HTMLDivElement>('#guide')
+const loadingSpinner = q<HTMLDivElement>('#loading-spinner')
 const guideTitle = q<HTMLHeadingElement>('#guide-title')
 const guideSub = q<HTMLParagraphElement>('#guide-sub')
 const guideDetail = q<HTMLParagraphElement>('#guide-detail')
@@ -171,6 +172,8 @@ function setupBar(): void {
 function renderGuide(): void {
   const v = machine.view()
   guide.classList.toggle('hidden', !v.expanded)
+  // The still-frame spinner hands over to the wizard card on expansion.
+  loadingSpinner.style.display = v.expanded ? 'none' : ''
   for (let i = 0; i < 3; i++) {
     const stepEl = q<HTMLElement>(`[data-step="${i}"]`)
     const dotEl = q<HTMLElement>(`#step-dot-${i}`)
@@ -558,10 +561,10 @@ window.addEventListener('DOMContentLoaded', () => {
     q('#version').textContent = 'dsh …'
     getVersion()
       .then((v) => {
-        q<HTMLSpanElement>('#guide-ver').textContent = 'v' + v
+        q<HTMLSpanElement>('#brand-ver').textContent = 'v' + v
       })
       .catch(() => {
-        q<HTMLSpanElement>('#guide-ver').textContent = ''
+        q<HTMLSpanElement>('#brand-ver').textContent = ''
       })
     await setupEvents()
     machine.event({ type: 'boot' })
