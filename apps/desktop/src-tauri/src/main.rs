@@ -349,23 +349,17 @@ fn find_bin(name: &str) -> Option<PathBuf> {
             }
         }
         if let Some(nvm) = home_dir().map(|h| h.join(".nvm").join("versions").join("node")) {
-            if let Ok(entries) = std::fs::read_dir(&nvm) {
-                let mut versions: Vec<(String, PathBuf)> = entries
-                    .flatten()
-                    .filter_map(|e| {
-                        let dir = e.file_name().to_string_lossy().to_string();
-                        let bin = e.path().join("bin").join(name);
-                        bin.is_file()
-                            .then(|| (dir.trim_start_matches('v').to_string(), bin))
-                    })
-                    .collect();
-                // nvm keeps several node versions around; prefer the
-                // newest so a stale v16/v18 never wins over an installed
-                // v22/v24 and trips the NODE_TOO_OLD precheck.
-                versions.sort_by(|a, b| version_cmp(&b.0, &a.0));
-                if let Some((_, p)) = versions.first() {
-                    return Some(p.clone());
-                }
+            if let Some(p) = newest_version_bin(&nvm, "", name) {
+                return Some(p);
+            }
+        }
+        // fnm v1.x keeps its data dir at ~/.fnm while newer builds use the
+        // XDG dir (~/.local/share/fnm); a global install made under the
+        // legacy fnm is invisible to the fnm-exec probe above, so glob its
+        // node versions like nvm.
+        if let Some(fnm) = home_dir().map(|h| h.join(".fnm").join("node-versions")) {
+            if let Some(p) = newest_version_bin(&fnm, "installation", name) {
+                return Some(p);
             }
         }
         None
@@ -502,6 +496,25 @@ fn check_node_requirement() -> Result<String, String> {
         ));
     }
     Ok(v)
+}
+
+/// Return the `name` bin under the numerically-newest version dir of a
+/// version-manager layout (`<root>/<vX>/<sub>/bin/<name>`) — nvm
+/// (`~/.nvm/versions/node`) and legacy fnm (`~/.fnm/node-versions`) both
+/// keep several node versions around and read_dir order is arbitrary, so
+/// the newest wins (a stale v16/v18 must never beat an installed v22/v24).
+fn newest_version_bin(root: &Path, sub: &str, name: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(root).ok()?;
+    let mut versions: Vec<(String, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let dir = e.file_name().to_string_lossy().to_string();
+            let bin = e.path().join(sub).join("bin").join(name);
+            bin.is_file().then(|| (dir.trim_start_matches('v').to_string(), bin))
+        })
+        .collect();
+    versions.sort_by(|a, b| version_cmp(&b.0, &a.0));
+    versions.first().map(|(_, p)| p.clone())
 }
 
 /// Compare dotted numeric versions (`24.19.0 > 8.0.0`) without semver
