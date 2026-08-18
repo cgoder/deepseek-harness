@@ -318,7 +318,14 @@ export function createLaunchMachine(port = 3080): LaunchMachine {
           const why = NETWORK_ERROR_CODES.has(e.code) || es === 'error-installTimeout'
             ? (e.summary || '网络连接中断，下载失败')
             : (e.summary || `npm 安装失败（${e.code}）`)
-          go(es, { error: errorView(es, why) })
+          // E404 / ETARGET: the package or version is missing from the
+          // configured npm registry (often a stale mirror) — point at the
+          // official registry in the fix guidance.
+          const fix =
+            e.code === 'E404' || e.code === 'ETARGET'
+              ? '当前 npm 源中不存在该包或版本（镜像源可能滞后）。可切换到官方源后重试：`npm config set registry https://registry.npmjs.org`；或手动安装：`npm install -g @deepseek-ai/dsh@latest`'
+              : undefined
+          go(es, { error: errorView(es, why, fix ? { fix } : undefined) })
         }
         break
       case 'starting':

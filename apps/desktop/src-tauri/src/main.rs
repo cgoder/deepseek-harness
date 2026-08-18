@@ -350,12 +350,21 @@ fn find_bin(name: &str) -> Option<PathBuf> {
         }
         if let Some(nvm) = home_dir().map(|h| h.join(".nvm").join("versions").join("node")) {
             if let Ok(entries) = std::fs::read_dir(&nvm) {
-                if let Some(p) = entries
+                let mut versions: Vec<(String, PathBuf)> = entries
                     .flatten()
-                    .map(|e| e.path().join("bin").join(name))
-                    .find(|p| p.is_file())
-                {
-                    return Some(p);
+                    .filter_map(|e| {
+                        let dir = e.file_name().to_string_lossy().to_string();
+                        let bin = e.path().join("bin").join(name);
+                        bin.is_file()
+                            .then(|| (dir.trim_start_matches('v').to_string(), bin))
+                    })
+                    .collect();
+                // nvm keeps several node versions around; prefer the
+                // newest so a stale v16/v18 never wins over an installed
+                // v22/v24 and trips the NODE_TOO_OLD precheck.
+                versions.sort_by(|a, b| version_cmp(&b.0, &a.0));
+                if let Some((_, p)) = versions.first() {
+                    return Some(p.clone());
                 }
             }
         }
@@ -493,6 +502,21 @@ fn check_node_requirement() -> Result<String, String> {
         ));
     }
     Ok(v)
+}
+
+/// Compare dotted numeric versions (`24.19.0 > 8.0.0`) without semver
+/// parsing; used to pick the newest node under nvm.
+fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let pa: Vec<u64> = a.split('.').filter_map(|s| s.parse().ok()).collect();
+    let pb: Vec<u64> = b.split('.').filter_map(|s| s.parse().ok()).collect();
+    for i in 0..pa.len().max(pb.len()) {
+        let x = pa.get(i).copied().unwrap_or(0);
+        let y = pb.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x.cmp(&y);
+        }
+    }
+    std::cmp::Ordering::Equal
 }
 
 /// The dsh invocation resolved without triggering a first-use install:

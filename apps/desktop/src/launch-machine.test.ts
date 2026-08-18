@@ -119,6 +119,8 @@ describe('launch-machine: slow path (download → install → start)', () => {
     ])
     expect(v.state).toBe('error-installFailed')
     expect(v.error?.why).toBe('No matching version found')
+    // E404/ETARGET guidance points at the registry, not the network.
+    expect(v.error?.fix).toContain('registry.npmjs.org')
   })
 })
 
