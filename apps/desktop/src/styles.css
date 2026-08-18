@@ -280,17 +280,6 @@ main {
   max-height: calc(100vh - 120px);
   overflow: auto;
 }
-.a-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
-.a-brand .name { font-weight: 700; font-size: 15px; }
-.a-brand .ver {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--bg-3);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 2px 9px;
-}
 .a-link {
   color: var(--muted);
   font-size: 12px;
