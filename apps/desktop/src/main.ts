@@ -383,12 +383,24 @@ function setupTabs(): void {
   })
 }
 
+/**
+ * Color-code a raw stderr line: npm fetch lines are download progress
+ * (normal), npm notice/info lines are informational, everything else on
+ * stderr is treated as an error. Red is reserved for real errors so a
+ * healthy install never looks broken.
+ */
+function classifyStderr(line: string): 'out' | 'sys' | 'err' {
+  if (line.includes('npm http fetch')) return 'out'
+  if (line.startsWith('npm notice') || line.startsWith('npm info')) return 'sys'
+  return 'err'
+}
+
 async function setupEvents(): Promise<void> {
   await listen<string>('server:stdout', (e) => {
     appendLog(e.payload, 'out')
   })
   await listen<string>('server:stderr', (e) => {
-    appendLog(e.payload, 'err')
+    appendLog(e.payload, classifyStderr(e.payload))
     // npm --loglevel=info prints one fetch line per downloaded package;
     // they mark the downloading phase of a first-run install.
     if (e.payload.includes('npm http fetch')) {
@@ -448,7 +460,7 @@ async function setupEvents(): Promise<void> {
     appendLog(e2.payload, 'out')
   })
   await listen<string>('upgrade:stderr', (e2) => {
-    appendLog(e2.payload, 'err')
+    appendLog(e2.payload, classifyStderr(e2.payload))
   })
 }
 
