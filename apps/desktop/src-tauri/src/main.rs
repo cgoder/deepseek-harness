@@ -743,10 +743,13 @@ fn run_npm(app: &AppHandle, args: &[String], timeout: Duration) -> Result<(), St
                 }
                 let json = collected.lock().unwrap().clone();
                 if status.success() {
-                    let _ = app.emit("dsh:installed", extract_installed_version(&json));
+                    let version = extract_installed_version(&json);
+                    log_line(&format!("npm install ok: {version} (exit 0)"));
+                    let _ = app.emit("dsh:installed", version);
                     return Ok(());
                 }
                 let (code, summary) = extract_install_error(&json);
+                log_line(&format!("npm install failed: {code} {summary}"));
                 let _ = app.emit("dsh:install-failed", InstallError { code, summary });
                 return Err(format!(
                     "npm {} 失败（退出码 {:?}）",
@@ -759,6 +762,7 @@ fn run_npm(app: &AppHandle, args: &[String], timeout: Duration) -> Result<(), St
         }
         if started.elapsed() >= timeout {
             kill_process_group(child.id());
+            log_line(&format!("npm install timed out after {}s", timeout.as_secs()));
             let _ = app.emit(
                 "dsh:install-failed",
                 InstallError {
