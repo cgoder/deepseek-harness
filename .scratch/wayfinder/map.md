@@ -26,6 +26,8 @@
 <!-- 索引：每行一条已关闭票据 —— 标题 + 链接 + 一句话结论。当前为空（charting 完成，无已解决票据）。 -->
 
 - [引导页视觉设计](tickets/01-guide-page-visual-design.md) — 三变体对比后选定 **A 向导步进** 为模板：品牌行右侧「详情 ▸」弹模态（四项检测 + 日志 + 修复指引，随场景联动）、左上角用真实应用小图标（透明显示，无蒙层）、主题跟随系统明暗（prefers-color-scheme + auto/light/dark 强制开关）。原型归档于分支 `prototype/powerd-launch-shell`（841d8f77）。
+- [启动状态机与切换时序](tickets/02-launch-state-machine.md) — **前端 FSM**（迁移逻辑全在 main.ts，Rust 只当命令/事件源）；状态集 idle/detecting/installing/starting/reusing/ready/stopped/error；快路径**静帧展开**（>250ms 才展开向导卡片）；网络检测**不进关键路径**（下载前/更新时才探测）；**阶段级重试**（UI 从失败阶段开始，实现复用 start_server 幂等性）；超时 300s 安装 / 90s 启动；安装进度 = stderr fetch 行计数（下载中→安装中两段）。
+- [Tauri 命令面设计](tickets/03-tauri-command-surface.md) — 命令面最小演化：仅新增 `dsh:installed {version}` 与 `dsh:install-failed {code, summary}` 两个事件，npm 命令行升级（`--fetch-retries=0 --json --loglevel=info` 等），统一**错误码契约** `CODE: message`（NODE_TOO_OLD / NODE_NOT_FOUND / NPM_NOT_FOUND / INSTALL_FAILED / SPAWN_FAILED）；明确不做 environment:check 大查询与流式进度事件。
 
 ## Not yet specified
 

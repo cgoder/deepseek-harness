@@ -29,10 +29,67 @@
       <section class="panel active" id="panel-app">
         <div class="app-frame">
           <div class="loading" id="loading">
-            <div class="spinner" id="loading-spinner"></div>
-            <p id="loading-text">正在启动 dsh web …</p>
-            <p class="hint" id="loading-hint" hidden>可在上方 CLI 页签查看详细日志，首次启动需联网下载依赖时可重试。</p>
-            <button class="retry-btn" id="btn-retry" hidden>重试启动</button>
+            <!-- fast-path still frame: app icon + spinner, no wizard -->
+            <div class="launch-frame" id="launch-frame">
+              <img class="app-icon" src="/powerd-icon.png" alt="PowerD" />
+              <div class="spinner" id="loading-spinner"></div>
+            </div>
+
+            <!-- wizard card, revealed after ~250ms on the slow path -->
+            <div class="guide hidden" id="guide">
+              <div class="a-card">
+                <div class="a-brand">
+                  <img class="app-icon small" src="/powerd-icon.png" alt="PowerD" />
+                  <span class="name">PowerD</span>
+                  <span class="ver" id="guide-ver"></span>
+                  <a class="a-link" id="btn-detail" title="查看检测明细与日志">详情 ▸</a>
+                </div>
+                <h2 class="a-title" id="guide-title">正在准备 PowerD</h2>
+                <p class="a-sub" id="guide-sub"></p>
+                <div class="a-steps">
+                  <div class="a-step" data-step="0">
+                    <span class="dot" id="step-dot-0"></span>
+                    <span class="label">检测环境</span>
+                    <span class="a-connector" data-conn="0"></span>
+                  </div>
+                  <div class="a-step" data-step="1">
+                    <span class="dot" id="step-dot-1"></span>
+                    <span class="label">准备 dsh</span>
+                    <span class="a-connector" data-conn="1"></span>
+                  </div>
+                  <div class="a-step" data-step="2">
+                    <span class="dot" id="step-dot-2"></span>
+                    <span class="label">启动服务</span>
+                  </div>
+                </div>
+                <p class="a-detail" id="guide-detail"></p>
+                <div class="a-error hidden" id="guide-error">
+                  <div class="head"><span>⚠</span> <span id="err-title"></span></div>
+                  <p class="why" id="err-why"></p>
+                  <p class="fix" id="err-fix"></p>
+                  <div class="actions">
+                    <button class="btn primary" id="btn-retry"></button>
+                    <button class="btn ghost" id="btn-copy-error">复制命令</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- detail modal: env checks + live log + fix guidance -->
+            <div class="overlay hidden" id="detail-overlay">
+              <div class="modal">
+                <div class="modal-head">
+                  <h3>环境详情</h3>
+                  <button class="x" id="btn-detail-close" title="关闭">×</button>
+                </div>
+                <div class="b-checks" id="detail-checks"></div>
+                <div class="b-panel">
+                  <h4>日志</h4>
+                  <pre class="b-log" id="detail-log"></pre>
+                  <p class="b-fix hidden" id="detail-fix"></p>
+                </div>
+              </div>
+            </div>
           </div>
           <iframe id="app-iframe" src="about:blank" title="PowerD"></iframe>
         </div>

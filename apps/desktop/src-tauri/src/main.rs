@@ -54,6 +54,29 @@ const FNM_CANDIDATES: [&str; 3] = [
 #[cfg_attr(debug_assertions, allow(dead_code))]
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Common npm flags for installs: fail fast on network errors instead of
+/// npm's silent retries, keep stdout a single JSON result and stderr the
+/// progress channel, and never write a package.json/lockfile into the
+/// target dir.
+#[cfg_attr(debug_assertions, allow(dead_code))] // release-only: used by run_npm
+const NPM_COMMON: &[&str] = &[
+    "--no-audit",
+    "--no-fund",
+    "--no-update-notifier",
+    "--fetch-retries=0",
+    "--no-save",
+    "--no-package-lock",
+    "--json",
+    "--loglevel=info",
+];
+
+#[cfg_attr(debug_assertions, allow(dead_code))] // release-only: constructed by run_npm
+#[derive(Clone, serde::Serialize)]
+struct InstallError {
+    code: String,
+    summary: String,
+}
+
 /// Resolve the server port once: `--port N` / `--port=N` argv (from
 /// `open "PowerD.app" --args --port N`) > `POWERD_PORT` env >
 /// default 3080.
@@ -451,21 +474,21 @@ fn parse_node_version(v: &str) -> Option<(u32, u32)> {
 /// tree failed to load" from inside dsh.
 fn check_node_requirement() -> Result<String, String> {
     let node = find_bin("node").ok_or_else(|| {
-        "未找到 Node.js：请先安装 Node.js ≥ 22.5（推荐 22.19+，nodejs.org，或 fnm / nvm / Homebrew）".to_string()
+        "NODE_NOT_FOUND: 未找到 Node.js：请先安装 Node.js ≥ 22.5（推荐 22.19+，nodejs.org，或 fnm / nvm / Homebrew）".to_string()
     })?;
     let out = launcher(&node.to_string_lossy(), node.parent())
         .arg("--version")
         .output()
-        .map_err(|e| format!("无法运行 Node.js（{e}），请先安装 Node.js ≥ 22.5"))?;
+        .map_err(|e| format!("NODE_CHECK_FAILED: 无法运行 Node.js（{e}），请先安装 Node.js ≥ 22.5"))?;
     if !out.status.success() {
-        return Err("无法运行 Node.js（node --version 失败）".to_string());
+        return Err("NODE_CHECK_FAILED: 无法运行 Node.js（node --version 失败）".to_string());
     }
     let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let nums = parse_node_version(&v)
         .ok_or_else(|| format!("无法解析 Node.js 版本：{v:?}"))?;
     if nums < MIN_NODE_VERSION {
         return Err(format!(
-            "检测到 Node.js {v}，dsh 需要 Node.js ≥ 22.5（依赖 node:zlib zstd 与 \
+            "NODE_TOO_OLD: 检测到 Node.js {v}，dsh 需要 Node.js ≥ 22.5（依赖 node:zlib zstd 与 \
              Promise.withResolvers）。请升级后重试：fnm install 22 / nvm install 22 / brew install node"
         ));
     }
@@ -542,16 +565,19 @@ fn dsh_source() -> DshSource {
     DshSource::Local
 }
 
-/// Spawn npm (via the fnm-aware base launcher) and emit its stdout/stderr
+/// Spawn npm (via the fnm-aware launcher) and emit its stdout/stderr
 /// through `server:stdout`/`server:stderr` so the CLI log panel shows the
-/// install progress. Blocks until the child exits.
+/// install progress. stdout is additionally collected (it is a single JSON
+/// line with `--json`) to emit `dsh:installed` (exit 0, with the installed
+/// version) or `dsh:install-failed` (exit ≠ 0 or timeout, with the npm
+/// error code and summary). Blocks until the child exits.
 #[cfg(not(debug_assertions))]
-fn run_npm(app: &AppHandle, args: &[&str], timeout: Duration) -> Result<(), String> {
+fn run_npm(app: &AppHandle, args: &[String], timeout: Duration) -> Result<(), String> {
     // Resolve npm across every Node installation instead of relying on PATH
     // or fnm: a Finder/Dock-launched process carries a minimal PATH, so a
     // machine without fnm would fail with ENOENT here.
     let npm = find_bin("npm").ok_or_else(|| {
-        "未找到 npm：请先安装 Node.js ≥ 22.19（nodejs.org，或 fnm / nvm / Homebrew）".to_string()
+        "NPM_NOT_FOUND: 未找到 npm：请先安装 Node.js ≥ 22.19（nodejs.org，或 fnm / nvm / Homebrew）".to_string()
     })?;
     let mut cmd = launcher(&npm.to_string_lossy(), npm.parent());
     cmd.args(args);
@@ -560,12 +586,16 @@ fn run_npm(app: &AppHandle, args: &[&str], timeout: Duration) -> Result<(), Stri
     {
         cmd.process_group(0);
     }
-    let mut child = cmd.spawn().map_err(|e| format!("无法启动 npm：{e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("INSTALL_FAILED: 无法启动 npm：{e}"))?;
+    let collected = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     if let Some(stdout) = child.stdout.take() {
         let app = app.clone();
+        let collected = collected.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 if let Ok(l) = line {
+                    collected.lock().unwrap().push_str(&l);
+                    collected.lock().unwrap().push('\n');
                     let _ = app.emit("server:stdout", l);
                 }
             }
@@ -585,19 +615,76 @@ fn run_npm(app: &AppHandle, args: &[&str], timeout: Duration) -> Result<(), Stri
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                let json = collected.lock().unwrap().clone();
                 if status.success() {
+                    let _ = app.emit("dsh:installed", extract_installed_version(&json));
                     return Ok(());
                 }
-                return Err(format!("npm {} 失败（退出码 {:?}）", args.join(" "), status.code()));
+                let (code, summary) = extract_install_error(&json);
+                let _ = app.emit("dsh:install-failed", InstallError { code, summary });
+                return Err(format!(
+                    "npm {} 失败（退出码 {:?}）",
+                    args.join(" "),
+                    status.code()
+                ));
             }
             Ok(None) => {}
             Err(e) => return Err(format!("等待 npm 退出失败：{e}")),
         }
         if started.elapsed() >= timeout {
             kill_process_group(child.id());
-            return Err(format!("npm {} 超时（{}s），已终止", args.join(" "), timeout.as_secs()));
+            let _ = app.emit(
+                "dsh:install-failed",
+                InstallError {
+                    code: "TIMEOUT".to_string(),
+                    summary: format!("安装超时（{}s），已终止", timeout.as_secs()),
+                },
+            );
+            return Err(format!(
+                "npm {} 超时（{}s），已终止",
+                args.join(" "),
+                timeout.as_secs()
+            ));
         }
         std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Extract the first added package version from an npm `--json` install
+/// result (`{"add":[{"name","version",...}]}`); "unknown" when absent.
+#[cfg_attr(debug_assertions, allow(dead_code))] // release-only: called by run_npm
+fn extract_installed_version(json: &str) -> String {
+    let v = serde_json::from_str::<serde_json::Value>(json).ok();
+    v.as_ref()
+        .and_then(|v| v.get("add"))
+        .and_then(|a| a.as_array())
+        .and_then(|add| add.first())
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// Extract `error.code` and `error.detail`/`error.summary` from an npm
+/// `--json` failure (`{"error":{...}}`), falling back to UNKNOWN.
+#[cfg_attr(debug_assertions, allow(dead_code))] // release-only: called by run_npm
+fn extract_install_error(json: &str) -> (String, String) {
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(v) => {
+            let err = v.get("error");
+            let code = err
+                .and_then(|e| e.get("code"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("UNKNOWN")
+                .to_string();
+            let summary = err
+                .and_then(|e| e.get("detail").or_else(|| e.get("summary")))
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string();
+            (code, summary)
+        }
+        Err(_) => ("UNKNOWN".to_string(), "安装失败，无更多信息".to_string()),
     }
 }
 
@@ -613,7 +700,10 @@ fn ensure_dsh_installed(app: &AppHandle) -> Result<PathBuf, String> {
     let prefix = dir.to_str().ok_or_else(|| "安装目录路径无效".to_string())?;
     let _ = app.emit("dsh:installing", ());
     let _ = app.emit("server:stdout", format!("$ npm install --prefix {prefix} {PACKAGE}"));
-    run_npm(app, &["install", "--prefix", prefix, "--no-audit", "--no-fund", PACKAGE], INSTALL_TIMEOUT)?;
+    let mut args = vec!["install".to_string(), "--prefix".to_string(), prefix.to_string()];
+    args.extend(NPM_COMMON.iter().map(|f| f.to_string()));
+    args.push(PACKAGE.to_string());
+    run_npm(app, &args, INSTALL_TIMEOUT)?;
     installed_dsh_bin().ok_or_else(|| format!("dsh 已安装但未找到 bin：{}", dir.display()))
 }
 
@@ -820,7 +910,7 @@ fn start_internal(app: &AppHandle) -> Result<Status, String> {
     let mut child = cmd.spawn().map_err(|e| {
         #[cfg(debug_assertions)]
         eprintln!("[powerd] spawn error: {e}");
-        format!("无法启动 dsh web：{e}")
+        format!("SPAWN_FAILED: 无法启动 dsh web：{e}")
     })?;
     let pid = child.id();
 
@@ -967,7 +1057,10 @@ async fn upgrade_dsh(app: AppHandle) -> Result<UpgradeResult, String> {
         }
 
         let _ = app.emit("server:stdout", format!("$ npm install --prefix {} {PACKAGE}@latest", install_dir().display()));
-        match run_npm(&app, &["install", "--prefix", install_dir().to_str().unwrap_or_default(), "--no-audit", "--no-fund", &format!("{PACKAGE}@latest")], INSTALL_TIMEOUT) {
+        let mut args = vec!["install".to_string(), "--prefix".to_string(), install_dir().to_str().unwrap_or_default().to_string()];
+        args.extend(NPM_COMMON.iter().map(|f| f.to_string()));
+        args.push(format!("{PACKAGE}@latest"));
+        match run_npm(&app, &args, INSTALL_TIMEOUT) {
             Ok(()) => {}
             Err(e) => return Ok(UpgradeResult { ok: false, version: "unknown".to_string(), restarted: false, message: format!("升级失败：{e}") }),
         }
