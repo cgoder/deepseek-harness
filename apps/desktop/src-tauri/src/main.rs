@@ -590,14 +590,17 @@ fn run_npm(app: &AppHandle, args: &[String], timeout: Duration) -> Result<(), St
     let collected = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let mut readers = Vec::new();
     if let Some(stdout) = child.stdout.take() {
-        let app = app.clone();
+        // With `--json` the whole install result is a single large JSON
+        // document on stdout (one entry per package). It is useless as a
+        // log line, so it is collected for parsing only and NOT forwarded;
+        // progress lives on stderr (fetch lines) and the outcome in the
+        // dsh:installed / dsh:install-failed events.
         let collected = collected.clone();
         readers.push(std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 if let Ok(l) = line {
                     collected.lock().unwrap().push_str(&l);
                     collected.lock().unwrap().push('\n');
-                    let _ = app.emit("server:stdout", l);
                 }
             }
         }));
@@ -656,15 +659,20 @@ fn run_npm(app: &AppHandle, args: &[String], timeout: Duration) -> Result<(), St
     }
 }
 
-/// Extract the first added package version from an npm `--json` install
-/// result (`{"add":[{"name","version",...}]}`); "unknown" when absent.
+/// Extract the installed `PACKAGE` version from an npm `--json` install
+/// result (`{"add":[{"name","version",...}]}`), matched by package name
+/// because `add` ordering is npm-internal; "unknown" when absent.
 #[cfg_attr(debug_assertions, allow(dead_code))] // release-only: called by run_npm
 fn extract_installed_version(json: &str) -> String {
     let v = serde_json::from_str::<serde_json::Value>(json).ok();
     v.as_ref()
         .and_then(|v| v.get("add"))
         .and_then(|a| a.as_array())
-        .and_then(|add| add.first())
+        .and_then(|add| {
+            add.iter().find(|p| {
+                p.get("name").and_then(|n| n.as_str()) == Some(PACKAGE)
+            })
+        })
         .and_then(|p| p.get("version"))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
