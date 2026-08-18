@@ -242,13 +242,14 @@ main {
   align-items: center;
   gap: 22px;
 }
+/* The logo is a transparent SVG (POWER.svg) whose gradient graphic stays
+   legible in both system themes; size follows the window (vmin) so the
+   still frame scales up on large displays without overflow. */
 .app-icon {
-  width: 64px;
-  height: 64px;
-  border-radius: 15px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  width: clamp(64px, 13vmin, 128px);
+  height: auto;
 }
-.app-icon.small { width: 30px; height: 30px; border-radius: 8px; box-shadow: none; }
+.app-icon.small { width: 36px; }
 
 /* wizard card */
 .guide {
