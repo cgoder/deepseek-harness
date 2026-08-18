@@ -25,6 +25,8 @@
 
 <!-- 索引：每行一条已关闭票据 —— 标题 + 链接 + 一句话结论。当前为空（charting 完成，无已解决票据）。 -->
 
+- [引导页视觉设计](tickets/01-guide-page-visual-design.md) — 三变体对比后选定 **A 向导步进** 为模板：品牌行右侧「详情 ▸」弹模态（四项检测 + 日志 + 修复指引，随场景联动）、左上角用真实应用小图标（透明显示，无蒙层）、主题跟随系统明暗（prefers-color-scheme + auto/light/dark 强制开关）。原型归档于分支 `prototype/powerd-launch-shell`（841d8f77）。
+
 ## Not yet specified
 
 - 引导页 → 主界面的过渡动画细节（等视觉原型定）
