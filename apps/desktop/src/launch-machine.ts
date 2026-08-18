@@ -200,6 +200,14 @@ export function createLaunchMachine(port = 3080): LaunchMachine {
   function go(next: LaunchState, view: Partial<LaunchView> = {}): void {
     state = next
     error = view.error ?? null
+    // The wizard card expands only on the slow path: entering the
+    // install phase or any error state reveals it immediately, and the
+    // still frame's 250ms timer covers a slow detect. A fast path
+    // (detect → spawn → ready) never expands the card at all, so a
+    // cached/system dsh launch shows nothing but the brand + spinner.
+    if (next === 'installing' || next.startsWith('error-')) {
+      expanded = true
+    }
     // Step history: entering a stage marks everything before it done;
     // retrying into `detecting` resets the wizard from the start.
     if (next === 'detecting') {

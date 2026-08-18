@@ -23,15 +23,32 @@ describe('launch-machine: fast path', () => {
     expect(m.view().steps).toEqual(['done', 'done', 'done'])
   })
 
-  it('stays collapsed until the expand event (fast-path flicker guard)', () => {
+  it('stays collapsed on the fast path (no expand, no card flash)', () => {
     const m = createLaunchMachine(3080)
     m.event({ type: 'boot' })
     m.event({ type: 'spawned' })
+    m.event({ type: 'ready' })
+    expect(m.view().expanded).toBe(false)
+  })
+
+  it('expand is only accepted explicitly; installing and errors expand on their own', () => {
+    const m = createLaunchMachine(3080)
+    m.event({ type: 'boot' })
     expect(m.view().expanded).toBe(false)
     m.event({ type: 'expand' })
     expect(m.view().expanded).toBe(true)
     m.event({ type: 'expand' }) // idempotent
     expect(m.view().expanded).toBe(true)
+
+    const slow = createLaunchMachine(3080)
+    slow.event({ type: 'boot' })
+    slow.event({ type: 'install-start' })
+    expect(slow.view().expanded).toBe(true)
+
+    const err = createLaunchMachine(3080)
+    err.event({ type: 'boot' })
+    err.event({ type: 'launch-error', code: 'NODE_TOO_OLD', message: 'old' })
+    expect(err.view().expanded).toBe(true)
   })
 
   it('reuse path: detecting → reusing → ready', () => {

@@ -569,11 +569,14 @@ window.addEventListener('DOMContentLoaded', () => {
     await setupEvents()
     machine.event({ type: 'boot' })
     renderGuide()
-    // Fast-path flicker guard: only reveal the wizard once the launch has
-    // taken noticeably longer than the ~200ms happy path.
+    // Fast-path flicker guard: only a detect that outlives ~250ms reveals
+    // the wizard; installing/error states expand on their own, and a fast
+    // cached/system launch never shows the card at all.
     window.setTimeout(() => {
-      machine.event({ type: 'expand' })
-      renderGuide()
+      if (machine.view().state === 'detecting') {
+        machine.event({ type: 'expand' })
+        renderGuide()
+      }
     }, 250)
     try {
       const s = await invoke<ServerStatus>('server_status')

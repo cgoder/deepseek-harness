@@ -310,8 +310,8 @@ main {
   margin-bottom: 2px;
 }
 .a-title { font-size: 19px; font-weight: 700; margin: 0; }
-.a-sub { font-size: 13px; color: var(--muted); margin: 0 0 22px; }
-.a-steps { display: flex; align-items: center; margin-bottom: 20px; }
+.a-sub { font-size: 13px; color: var(--muted); margin: 0 0 26px; }
+.a-steps { display: flex; align-items: center; margin-bottom: 24px; }
 .a-step { display: flex; align-items: center; gap: 8px; flex: 1; }
 .a-step:last-child { flex: 0; }
 .a-step .dot {
@@ -335,7 +335,7 @@ main {
 .a-step .label { font-size: 13px; color: var(--muted); white-space: nowrap; }
 .a-step.active .label { color: var(--fg); font-weight: 600; }
 .a-step.fail .label { color: var(--red); }
-.a-connector { height: 2px; flex: 0.4; min-width: 26px; background: var(--border); margin: 0 6px; border-radius: 1px; }
+.a-connector { height: 2px; flex: 0.4; min-width: 26px; background: var(--border); margin: 0 10px; border-radius: 1px; }
 .a-connector.done { background: var(--green); }
 .a-detail { font-size: 13px; color: var(--muted); min-height: 20px; margin: 0; display: flex; gap: 8px; align-items: center; }
 
