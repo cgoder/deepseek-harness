@@ -124,8 +124,10 @@ const FIX_INSTALL_NETWORK =
   '请检查网络连接（公司代理 / VPN）后重试。也可以手动安装：`npm install -g @deepseek-ai/dsh@latest`'
 const FIX_RETRY = '请重试；若仍失败，展开「详情」查看日志'
 
-const COPY_NODE = 'https://nodejs.org'
+const COPY_NODE = 'fnm install 22\nnvm install 22\nbrew install node'
 const COPY_NPM = 'npm install -g @deepseek-ai/dsh@latest'
+const COPY_REGISTRY =
+  'npm config set registry https://registry.npmjs.org\nnpm install -g @deepseek-ai/dsh@latest'
 
 function errorView(state: LaunchState, why: string, overrides?: Partial<LaunchErrorView>): LaunchErrorView {
   const base: LaunchErrorView = {
@@ -325,7 +327,14 @@ export function createLaunchMachine(port = 3080): LaunchMachine {
             e.code === 'E404' || e.code === 'ETARGET'
               ? '当前 npm 源中不存在该包或版本（镜像源可能滞后）。可切换到官方源后重试：`npm config set registry https://registry.npmjs.org`；或手动安装：`npm install -g @deepseek-ai/dsh@latest`'
               : undefined
-          go(es, { error: errorView(es, why, fix ? { fix } : undefined) })
+          const copyText =
+            e.code === 'E404' || e.code === 'ETARGET' ? COPY_REGISTRY : undefined
+          go(es, {
+            error: errorView(es, why, {
+              ...(fix ? { fix } : {}),
+              ...(copyText ? { copyText } : {}),
+            }),
+          })
         }
         break
       case 'starting':

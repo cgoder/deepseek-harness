@@ -119,8 +119,12 @@ describe('launch-machine: slow path (download → install → start)', () => {
     ])
     expect(v.state).toBe('error-installFailed')
     expect(v.error?.why).toBe('No matching version found')
-    // E404/ETARGET guidance points at the registry, not the network.
+    // E404/ETARGET guidance points at the registry, not the network,
+    // and the copy command switches the registry then reinstalls.
     expect(v.error?.fix).toContain('registry.npmjs.org')
+    expect(v.error?.copyText).toBe(
+      'npm config set registry https://registry.npmjs.org\nnpm install -g @deepseek-ai/dsh@latest',
+    )
   })
 })
 
@@ -259,13 +263,14 @@ describe('launch-machine: detail-modal checks', () => {
     expect(v.checks[3]).toMatchObject({ state: 'ok', detail: '端口 3080 已有服务' })
   })
 
-  it('node error flags the Node.js row and keeps a copy link', () => {
+  it('node error flags the Node.js row and copies usable upgrade commands', () => {
     const v = drive([
       { type: 'boot' },
       { type: 'launch-error', code: 'NODE_TOO_OLD', message: 'NODE_TOO_OLD: 检测到 Node.js v20.20.2' },
     ])
     expect(v.checks[0]).toMatchObject({ state: 'fail', detail: '检测到 Node.js v20.20.2' })
-    expect(v.error?.copyText).toBe('https://nodejs.org')
+    expect(v.error?.copyText).toContain('fnm install 22')
+    expect(v.error?.copyText).toContain('nvm install 22')
   })
 
   it('install failure flags the dsh row and copies the manual install command', () => {
