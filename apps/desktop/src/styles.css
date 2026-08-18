@@ -156,7 +156,6 @@ main {
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-.loading p { color: var(--muted); font-size: 14px; margin: 0; }
 
 /* CLI tab */
 .cli-toolbar {
@@ -230,7 +229,6 @@ main {
 
 /* loading overlay states — the launch guide replaced the old retry hint */
 .loading p.error-text { color: var(--red); font-weight: 600; }
-.loading .hint { font-size: 12.5px; max-width: 420px; text-align: center; line-height: 1.6; }
 
 /* ---------- launch guide page (wayfinder tickets 01 + 02) ---------- */
 .loading { background: var(--bg); }
