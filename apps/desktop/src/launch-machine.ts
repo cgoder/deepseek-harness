@@ -292,6 +292,7 @@ export function createLaunchMachine(port = 3080): LaunchMachine {
         if (e.type === 'reuse') go('reusing')
         else if (e.type === 'install-start') go('installing')
         else if (e.type === 'spawned') go('starting')
+        else if (e.type === 'ready') go('ready') // port already open (Rust reuse path)
         else if (e.type === 'launch-error') {
           const es = errorStateFor(e.code)
           go(es, { error: errorView(es, stripCode(e.message)) })

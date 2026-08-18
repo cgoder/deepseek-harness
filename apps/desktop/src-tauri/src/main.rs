@@ -588,10 +588,11 @@ fn run_npm(app: &AppHandle, args: &[String], timeout: Duration) -> Result<(), St
     }
     let mut child = cmd.spawn().map_err(|e| format!("INSTALL_FAILED: 无法启动 npm：{e}"))?;
     let collected = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut readers = Vec::new();
     if let Some(stdout) = child.stdout.take() {
         let app = app.clone();
         let collected = collected.clone();
-        std::thread::spawn(move || {
+        readers.push(std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 if let Ok(l) = line {
                     collected.lock().unwrap().push_str(&l);
@@ -599,7 +600,7 @@ fn run_npm(app: &AppHandle, args: &[String], timeout: Duration) -> Result<(), St
                     let _ = app.emit("server:stdout", l);
                 }
             }
-        });
+        }));
     }
     if let Some(stderr) = child.stderr.take() {
         let app = app.clone();
@@ -615,6 +616,11 @@ fn run_npm(app: &AppHandle, args: &[String], timeout: Duration) -> Result<(), St
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                // The child has exited, so its stdout pipe hit EOF; join the
+                // reader so the final JSON line is collected before parsing.
+                for h in readers.drain(..) {
+                    let _ = h.join();
+                }
                 let json = collected.lock().unwrap().clone();
                 if status.success() {
                     let _ = app.emit("dsh:installed", extract_installed_version(&json));
@@ -980,6 +986,11 @@ fn start_internal(app: &AppHandle) -> Result<Status, String> {
                     }
                 }
                 if Instant::now() >= deadline {
+                    // Release the pid so a retry can respawn, and kill the
+                    // stale child instead of leaving it to hold the slot.
+                    if let Some(pid) = app.state::<ServerState>().pid.lock().unwrap().take() {
+                        kill_process_group(pid);
+                    }
                     let _ = app.emit("server:timeout", ());
                     return;
                 }
@@ -991,9 +1002,15 @@ fn start_internal(app: &AppHandle) -> Result<Status, String> {
     Ok(status_of(true))
 }
 
+/// Run the blocking launch work off the main thread: a first-run npm
+/// install can block for minutes, and on macOS a blocked main thread
+/// freezes the webview (beachball) so the progress events could never
+/// render. async fn so Tauri runs it on the async runtime.
 #[tauri::command]
-fn start_server(app: AppHandle) -> Result<Status, String> {
-    start_internal(&app)
+async fn start_server(app: AppHandle) -> Result<Status, String> {
+    tauri::async_runtime::spawn_blocking(move || start_internal(&app))
+        .await
+        .map_err(|e| format!("SPAWN_FAILED: 后台启动任务失败：{e}"))?
 }
 
 #[tauri::command]
@@ -1015,10 +1032,14 @@ fn stop_server(app: AppHandle) -> Status {
 }
 
 #[tauri::command]
-fn restart_server(app: AppHandle) -> Result<Status, String> {
-    stop_server(app.clone());
-    std::thread::sleep(Duration::from_millis(600));
-    start_internal(&app)
+async fn restart_server(app: AppHandle) -> Result<Status, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        stop_server(app.clone());
+        std::thread::sleep(Duration::from_millis(600));
+        start_internal(&app)
+    })
+    .await
+    .map_err(|e| format!("SPAWN_FAILED: 后台重启任务失败：{e}"))?
 }
 
 /// Upgrade dsh to the latest published npm version. Only meaningful for

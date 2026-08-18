@@ -42,6 +42,13 @@ describe('launch-machine: fast path', () => {
     expect(mid.activeStep).toBe(3)
     expect(mid.title).toContain('正在运行的 dsh')
   })
+
+  it('ready emitted while still detecting (Rust port-reuse path) lands in ready', () => {
+    // start_server emits server:ready before returning when the port is
+    // already open; the event can arrive while the machine is detecting.
+    const v = drive([{ type: 'boot' }, { type: 'ready' }])
+    expect(v.state).toBe('ready')
+  })
 })
 
 describe('launch-machine: slow path (download → install → start)', () => {
@@ -177,6 +184,18 @@ describe('launch-machine: start phase failures', () => {
   it('SPAWN_FAILED launch error maps to start-failed', () => {
     const v = drive([{ type: 'boot' }, { type: 'launch-error', code: 'SPAWN_FAILED', message: 'SPAWN_FAILED: 无法启动 dsh web：x' }])
     expect(v.state).toBe('error-startFailed')
+  })
+
+  it('start-timeout retry restarts cleanly (stale pid released on timeout)', () => {
+    const m = createLaunchMachine(3080)
+    m.event({ type: 'boot' })
+    m.event({ type: 'spawned' })
+    m.event({ type: 'timeout' })
+    expect(m.view().state).toBe('error-startTimeout')
+    m.event({ type: 'retry' })
+    m.event({ type: 'spawned' })
+    m.event({ type: 'ready' })
+    expect(m.view().state).toBe('ready')
   })
 })
 
