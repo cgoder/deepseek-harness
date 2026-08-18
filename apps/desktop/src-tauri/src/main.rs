@@ -57,7 +57,11 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 /// Common npm flags for installs: fail fast on network errors instead of
 /// npm's silent retries, keep stdout a single JSON result and stderr the
 /// progress channel, and never write a package.json/lockfile into the
-/// target dir.
+/// target dir. `--legacy-peer-deps=false` pins the default peer-install
+/// behavior so a user ~/.npmrc with legacy-peer-deps=true (a common
+/// ERESOLVE workaround) cannot silently skip the peerDependencies that
+/// dsh-app-boot needs at runtime (field report: ERR_MODULE_NOT_FOUND for
+/// @deepseek-ai/cordis-plugin-group).
 #[cfg_attr(debug_assertions, allow(dead_code))] // release-only: used by run_npm
 const NPM_COMMON: &[&str] = &[
     "--no-audit",
@@ -68,6 +72,7 @@ const NPM_COMMON: &[&str] = &[
     "--no-package-lock",
     "--json",
     "--loglevel=info",
+    "--legacy-peer-deps=false",
 ];
 
 #[cfg_attr(debug_assertions, allow(dead_code))] // release-only: constructed by run_npm
